@@ -1,3 +1,5 @@
+import { DataTypeOid, DataTypeOids } from "./protocol/constants"
+
 export class PostgresError extends Error {
     constructor(
         public override message: string, 
@@ -71,3 +73,18 @@ export const ErrDatabaseNotFound = new PostgresError('Database with that dsn not
 export const ErrUntrustedCertificate = new PostgresError("Database SSL certificate is untrusted or self-signed")
 export const ErrCertificateFileNotFound = new PostgresError("The SSL certificate file specified in caPath was not found")
 
+export function createBindTypeError(index: number, expectedType: DataTypeOid, actualValue: unknown): PostgresError {
+    const position = (index + 1).toString()
+    const actualType = actualValue === null ? 'null' : typeof actualValue
+    
+    const message = `Bind error: Parameter $${position} type mismatch. Expected ${expectedType}, received "${actualType}(${actualValue})".`
+    
+    return new PostgresError(
+        message,
+        '22000',                                            // code
+        `The parameter at position $${position} failed client-side binary validation.`, // detail
+        'ERROR',                                            // severity
+        'writeBind() inside driver',                        // where
+        `Ensure that the argument passed as $${position} matches the PostgreSQL schema requirements.` // hint
+    )
+}

@@ -4,10 +4,6 @@ on:
   workflow_dispatch:
   push:
     branches: [ main ]
-    paths:
-      - 'server.ts'
-      - 'package.json'
-      - '.github/workflows/**'
 
 jobs:
   benchmark:

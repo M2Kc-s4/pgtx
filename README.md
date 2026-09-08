@@ -50,36 +50,47 @@ Benchmarks run on GitHub Actions (Ubuntu, 2 vCPUs), reproducible, sources in thi
  
 Bun.sql is Bun's own built-in driver, written in native code and generally treated as the speed baseline in that ecosystem. Pgtx stays ahead of it at every concurrency level tested — the gap doesn't come from JS-vs-native, it comes from the protocol implementation.
  
-**How:** everything you fire concurrently against the same connection gets folded into one pipelined write — Parse/Bind/Execute for every query in the batch goes out in a single `socket.write()`, and results get demuxed as they come back, in order, without buffering rows you haven't asked for yet. Prepared statements are cached and deduplicated automatically, row descriptions are cached alongside them, and the binary protocol skips text (de)serialization where it can. None of this requires you to change how you write queries.
+**How:** everything you fire concurrently against the same connection gets folded into one pipelined write — Parse/Bind/Execute for every query in the batch goes out in a single `socket.write()`, and results get demuxed as they come back, in order, without buffering rows you haven't asked for yet. Prepared statements are cached and deduplicated automatically, row descriptions are cached alongside them. None of this requires you to change how you write queries.
+
 
 ## The parts worth knowing about
 
 
-### Every query is its own commit boundary
+### Error handling
 
-Fire off several queries in the same batch and one of them fails — the others aren't affected. Each query gets its own Sync, which means its own implicit transaction: an error in query B doesn't undo query A, even if A already returned and B is still in flight on the same pipelined write.
+Every query returns a `Future<T[], PostgresError>` instead of a bare `Promise`. `await` works as usual, while `Future` also provides typed error handling and recovery without a `try/catch` pyramid.
+
+Queries in the same pipeline are isolated from each other. Each query gets its own `Sync`, so an error in one query does not affect other queries that were sent in the same batch.
 
 ```typescript
 const [a, b] = await Promise.allSettled([
   pool.execute`UPDATE accounts SET balance = balance + 100 WHERE id = ${1}`,
   pool.execute`INSERT INTO accounts (id) VALUES (${1})` // duplicate key, fails
 ])
-// a: fulfilled, the balance update is committed regardless of b's outcome
+
+// a: fulfilled — the balance update is committed
+// b: rejected — the duplicate key error only affects this query
 ```
 
-This isolation is per-statement, not free-standing atomicity across statements — if you need several queries to succeed or fail together, that's what `begin()` and `savepoint()` are for. Outside a transaction, every query stands on its own.
-
-
-### Errors you can pattern-match on
-
-Every call returns a `Future<T[], PostgresError>` from [fluent-future](https://www.npmjs.com/package/fluent-future) instead of a bare `Promise`. `await` still works exactly like you'd expect — but you also get typed errors and a way to handle them without a `try/catch` pyramid:
+Errors can be matched and recovered directly on the `Future`:
 
 ```typescript
-const users = await pool.query<User>`SELECT * FROM users WHERE id = ${1}`
-  .recoverIf(err => err.code === '42P01', [])  // undefined_table → []
-  .recoverIf(err => err.code === '23505', [])  // unique_violation → []
+const users = await pool.query<User>`
+  SELECT * FROM users WHERE id = ${1}
+`
+  .recoverIf(err => err.code === '42P01', []) // undefined_table → []
+  .recoverIf(err => err.code === '23505', []) // unique_violation → []
   .tapErr(err => logger.error(err))
 ```
+
+This isolation is per statement, not atomicity across multiple statements. If several queries must succeed or fail together, use `begin()` and `savepoint()`.
+
+
+### PostgreSQL Type Support
+
+The driver provides **100% support for PostgreSQL data types using the full binary protocol**. All supported types are encoded and decoded directly in PostgreSQL's binary wire format, without falling back to text-based parsing.
+
+For a complete list of supported PostgreSQL types, their JavaScript input/output types, and string formats, see the [PostgreSQL Data Types](./DATATYPES.md) reference.
 
 
 ### Transactions and savepoints

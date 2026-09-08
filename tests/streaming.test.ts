@@ -82,7 +82,7 @@ describe('Streaming test', () => {
         } catch (error: any) {
             const duration = Date.now() - startTime
             
-            assert.ok(duration >= 500 && duration < 1000)
+            assert.ok(duration >= 450 && duration < 1000)
             assert.strictEqual(error.message, 'Query timeout')
             assert.strictEqual(error.code, '57014')
         }

@@ -39,18 +39,18 @@ export type ResponseType = ValueOF<typeof ResponseTypes>
 
 
 export const DataTypeOids = {
-    Bool: 16,
+    Bool: 16, // parameter
     Bytea: 17, 
 
-    Char: 18,
+    Char: 18, // parameter
     Name: 19,
-    Text: 25,
-    Varchar: 1043,
-    Bpchar: 1042, 
+    Text: 25, // parameter
+    Varchar: 1043, // parameter
+    Bpchar: 1042, // parameter
 
-    Int2: 21, 
-    Int4: 23, 
-    Int8: 20, 
+    Int2: 21, // parameter
+    Int4: 23,// parameter
+    Int8: 20, // parameter
 
     Float4: 700, 
     Float8: 701, 

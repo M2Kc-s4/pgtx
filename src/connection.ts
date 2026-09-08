@@ -57,6 +57,7 @@ export class Connection {
         return `s-${this._stmtCounter++}` as StatementName
     }
 
+
     private _registerShedule() {
         if (!this._sheduled) {
             this._sheduled = true
@@ -68,29 +69,38 @@ export class Connection {
     private _shedule() {
         if (this._reconnecting) return
 
-        this._socket.write(this._writer)
+        this._writer.hasMore && this._socket.write(this._writer)
         this._writer.clear()
         this._sheduled = false
     }
 
-
-    private _registerQuery(query: PostgresQuery) {
+    
+    private _registerQuery(query: PostgresQuery): PostgresError | null {
         this._registerShedule()
-        this._queue.push(query)
 
         if (query instanceof ParseQuery) {
             this._writer
                 .writeParse(query.meta.statement, query.text)
                 .writeDescribe(DescribeType.Statement, query.meta.statement)
                 .writeSync()
+                
+            this._queue.push(query)
 
-            return
+            return null
         }
-        
-        this._writer
+
+        const err = this._writer
             .writeBind("", query.meta, query.args)
+        
+        if (err) return err
+
+        this._writer
             .writeExecute("")
             .writeSync()
+
+        this._queue.push(query)
+        
+        return null
     }
 
 
@@ -165,7 +175,12 @@ export class Connection {
             const query = new CollectQuery<T>(
                 parsed, text, args, parsed.columns, resolvers, this.config.queryTimeout
             )
-            this._registerQuery(query)
+            const err = this._registerQuery(query)
+
+            if (err) {
+                this._executingCounter--
+                return Future.reject(err)
+            }
 
             return query.resolvers.future
         }
@@ -190,7 +205,12 @@ export class Connection {
             const query = new CollectQuery<T>(
                 meta, text, args, meta.columns, resolvers, this.config.queryTimeout
             )
-            this._registerQuery(query)
+            const err = this._registerQuery(query)
+
+            if (err) {
+                this._executingCounter--
+                return Future.reject(err)
+            }
 
             return query.resolvers.future
         })
@@ -235,7 +255,12 @@ export class Connection {
             const query = new ExecuteQuery(
                 parsed, text, args, resolvers, this.config.queryTimeout
             )
-            this._registerQuery(query)
+            const err = this._registerQuery(query)
+
+            if (err) {
+                this._executingCounter--
+                return Future.reject(err)
+            }
 
             return query.resolvers.future
         }
@@ -253,12 +278,17 @@ export class Connection {
         }
 
         const parsing = this._parsing[text]
-
+        
         return parsing.andThen(meta => {
             const query = new ExecuteQuery(
                 meta, text, args, resolvers, this.config.queryTimeout
             )
-            this._registerQuery(query)
+            const err = this._registerQuery(query)
+
+            if (err) {
+                this._executingCounter--
+                return Future.reject(err)
+            }
 
             return query.resolvers.future
         })
@@ -319,7 +349,13 @@ export class Connection {
                 controller, parsed.columns, 
                 this.config.queryTimeout
             )
-            this._registerQuery(query)
+
+            const err = this._registerQuery(query)
+
+            if (err) {
+                this._executingCounter--
+                controller.error(err)
+            }
 
             return
         }
@@ -345,7 +381,12 @@ export class Connection {
                     null, this.config.queryTimeout
                 )
 
-                this._registerQuery(query)
+                const err = this._registerQuery(query)
+
+                if (err) {
+                    this._executingCounter--
+                    controller.error(err)
+                }
             })
             .tapErr(err => {
                 controller.error(err)
