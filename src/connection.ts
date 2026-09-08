@@ -88,7 +88,7 @@ export class Connection {
         }
         
         this._writer
-            .writeBind("", query.meta.statement, query.args, query.meta.parameters)
+            .writeBind("", query.meta, query.args)
             .writeExecute("")
             .writeSync()
     }
@@ -172,9 +172,7 @@ export class Connection {
 
         
 
-        if (!this._parsing[text]) {
-            console.log('parsed');
-            
+        if (!this._parsing[text]) {            
             const parseQuery = new ParseQuery(
                 {statement: this._nextStatement(), columns: EMPTY_ARRAY, parameters: EMPTY_ARRAY}, 
                 text, Future.withResolvers(), this.config.queryTimeout 

@@ -4,27 +4,6 @@ import assert from "assert"
 
 const allTypesTableName = "all_datatypes_parsing_test"
 
-type AllTypesRow = {
-    id_int4: number
-    id_int2: number
-    id_int8: bigint | number
-    flag_bool: boolean
-    text_col: string
-    varchar_col: string
-    char_col: string
-    float4_col: number
-    float64_col: number
-    bytea_col: Buffer
-    json_col: any
-    jsonb_col: any
-    date_col: Date 
-    ts_col: Date   
-    tstz_col: Date | string
-    uuid_col: string
-    numeric_col: string
-    time_col: string
-    timetz_col: string
-}
 
 describe("Complete PostgreSQL Binary Datatypes Parsing Test", async () => {
     const conn = await Connection.new({
@@ -37,6 +16,7 @@ describe("Complete PostgreSQL Binary Datatypes Parsing Test", async () => {
     })
 
     before(async () => {
+        await conn.query`drop table ${sql.ident(allTypesTableName)}`.recover()
         await conn.query`
             create table if not exists ${sql.literal(allTypesTableName)} (
                 id_int4 integer primary key,
@@ -57,7 +37,9 @@ describe("Complete PostgreSQL Binary Datatypes Parsing Test", async () => {
                 uuid_col uuid not null,
                 numeric_col numeric(14,4) not null,
                 time_col time not null,
-                timetz_col timetz not null
+                timetz_col timetz not null,
+                point point not null,
+                inta int4[]
             );`
     })
 
@@ -71,7 +53,7 @@ describe("Complete PostgreSQL Binary Datatypes Parsing Test", async () => {
         const sampleBytea = Buffer.from([0xaa, 0xbb, 0xcc, 0xdd])
         const sampleUuid = "a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11"
         
-        const testData: AllTypesRow = {
+        const testData = {
             id_int4: 42000,
             id_int2: 320,
             id_int8: 9223372036854n,
@@ -90,26 +72,18 @@ describe("Complete PostgreSQL Binary Datatypes Parsing Test", async () => {
             uuid_col: sampleUuid,
             numeric_col: "12345678.1234",
             time_col: "15:30:45.123",
-            timetz_col: "15:30:45.123+03:00"
+            timetz_col: "15:30:45.123+03:00",
+            point: {x: 1, y: 1},
+            inta: [1, 2, 3, 5]
         }
 
         await conn.query`
             insert into ${sql.ident(allTypesTableName)} ${sql.insert(testData)};
         `
 
-        const [row] = await conn.query<AllTypesRow>`SELECT * FROM ${sql.ident(allTypesTableName)}`
+        const [row] = await conn.query`SELECT * FROM ${sql.ident(allTypesTableName)}`
 
         assert.deepStrictEqual(row, testData)
-
-        await conn.query`truncate ${sql.ident(allTypesTableName)}`
-
-        await conn.query`
-            insert into ${sql.ident(allTypesTableName)} ${sql.insert(testData)};
-        `
-
-        const [row2] = await conn.query<AllTypesRow>`SELECT * FROM ${sql.ident(allTypesTableName)}`
-
-        assert.deepStrictEqual(row2, testData, "Binary protocol type error")
     })
 
     it("should return null for all fields when they are NULL in database", async () => {

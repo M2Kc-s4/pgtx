@@ -1,4 +1,4 @@
-import { ParameterDescription } from "../types"
+import { ParameterDescription, StatementMeta } from "../types"
 import { prepareValue } from "../utils"
 import { DataTypeOid, DataTypeOids, DescribeType, RequestType, RequestTypes } from "./constants"
 
@@ -375,6 +375,15 @@ export class ConnectionRequestBuffer {
     }
 
 
+    writeBinaryPoint(value: { x: number; y: number }) {
+        this.writeInt32(16)
+        this.writeFloat64(value.x)
+        this.writeFloat64(value.y)
+
+        return this
+    }
+
+
     writeNull() {
         this.writeInt32(-1)
         return this
@@ -383,9 +392,9 @@ export class ConnectionRequestBuffer {
 
     private canWriteBinary(
         value: unknown,
-        oid: number | undefined
+        oid: number
     ): boolean {
-        if (value == null || !oid) {
+        if (value == null) {
             return false
         }
 
@@ -441,98 +450,112 @@ export class ConnectionRequestBuffer {
             case DataTypeOids.Timestamptz:
                 return value instanceof Date
 
+            
+            case DataTypeOids.Point:
+                return (
+                    value !== null &&
+                    typeof value === 'object' && 
+                    'x' in value && typeof value.x === 'number' && 
+                    'y' in value && typeof value.y === 'number'
+                )
+
             default:
                 return false
         }
     }
 
 
-        writeBind(
-            portName: string | "",
-            statementName: string | "",
-            params: unknown[],
-            parameterTypes?: ParameterDescription
-        ) {
-            const binary = params.map((value, i) =>
-                this.canWriteBinary(value, parameterTypes?.[i])
-            )
+    writeBind(
+        portName: string | "",
+        meta: StatementMeta,
+        params: unknown[],
+    ) {
+        const binary = params.map((value, i) =>
+            this.canWriteBinary(value, meta.parameters[i])
+        )
 
-            const request = this.startRequest(RequestTypes.Bind)
-                .writeCString(portName)
-                .writeCString(statementName)
-                .writeInt16(params.length)
+        const request = this.startRequest(RequestTypes.Bind)
+            .writeCString(portName)
+            .writeCString(meta.statement)
+            .writeInt16(params.length)
 
-            for (const isBinary of binary) {
-                request.writeInt16(isBinary ? 1 : 0)
-            }
-
-            request.writeInt16(params.length)
-
-            for (let i = 0; i < params.length; i++) {
-                const value = params[i]
-
-                if (value == null) {
-                    request.writeNull()
-                    continue
-                }
-
-                if (binary[i]) {                
-                    switch (parameterTypes![i]) {
-                        case DataTypeOids.Bool:
-                            request.writeBinaryBool(value as boolean)
-                            break
-
-                        case DataTypeOids.Int2:
-                            request.writeBinaryInt2(value as number)
-                            break
-
-                        case DataTypeOids.Int4:
-                            request.writeBinaryInt4(value as number)
-                            break
-
-                        case DataTypeOids.Int8:
-                            typeof value === "bigint"
-                                ? request.writeBinaryBigInt8(value)
-                                : request.writeBinaryInt8(value as number)
-                            break
-
-                        case DataTypeOids.Float4:
-                            request.writeBinaryFloat4(value as number)
-                            break
-
-                        case DataTypeOids.Float8:
-                            request.writeBinaryFloat8(value as number)
-                            break
-
-                        case DataTypeOids.Bytea:
-                            request.writeBinaryBytea(value as Uint8Array)
-                            break
-
-                        case DataTypeOids.Timestamp:
-                        case DataTypeOids.Timestamptz:
-                            request.writeBinaryTimestamp(value as Date)
-                            break
-                    }
-
-                    continue
-                }
-
-                const prepared = prepareValue(value)
-
-                if (prepared === null) {
-                    request.writeNull()
-                } else {
-                    request
-                        .writeInt32(Buffer.byteLength(prepared))
-                        .writeString(prepared)
-                }
-            }
-
-            request
-                .writeInt16(1)
-                .writeInt16(1)
-                .endRequest()
-
-            return this
+        for (const isBinary of binary) {
+            request.writeInt16(isBinary ? 1 : 0)
         }
+
+        request.writeInt16(params.length)
+
+        for (let i = 0; i < params.length; i++) {
+            const value = params[i]
+            const canBinary = binary[i]
+            const oid = meta.parameters[i]
+
+            if (value == null) {
+                request.writeNull()
+                continue
+            }
+
+            if (canBinary) {                
+                switch (oid) {
+                    case DataTypeOids.Bool:
+                        request.writeBinaryBool(value as boolean)
+                        break
+
+                    case DataTypeOids.Int2:
+                        request.writeBinaryInt2(value as number)
+                        break
+
+                    case DataTypeOids.Int4:
+                        request.writeBinaryInt4(value as number)
+                        break
+
+                    case DataTypeOids.Int8:
+                        typeof value === "bigint"
+                            ? request.writeBinaryBigInt8(value)
+                            : request.writeBinaryInt8(value as number)
+                        break
+
+                    case DataTypeOids.Float4:
+                        request.writeBinaryFloat4(value as number)
+                        break
+
+                    case DataTypeOids.Float8:
+                        request.writeBinaryFloat8(value as number)
+                        break
+
+                    case DataTypeOids.Bytea:
+                        request.writeBinaryBytea(value as Uint8Array)
+                        break
+
+                    case DataTypeOids.Timestamp:
+                    case DataTypeOids.Timestamptz:
+                        request.writeBinaryTimestamp(value as Date)
+                        break
+
+
+                    case DataTypeOids.Point:
+                        request.writeBinaryPoint(value as any)
+                }
+
+                continue
+            }
+
+            const prepared = prepareValue(value)
+
+            if (prepared === null) {
+                request.writeNull()
+            } else {
+                request
+                    .writeInt32(Buffer.byteLength(prepared))
+                    .writeString(prepared)
+            }
+        }
+
+        request
+            .writeInt16(1)
+            .writeInt16(1)
+            .endRequest()
+
+        return this
     }
+}
