@@ -179,7 +179,9 @@ export class Connection {
 
             if (err) {
                 this._executingCounter--
-                return Future.reject(err)
+
+                query.error(err)
+                return query.resolvers.future
             }
 
             return query.resolvers.future
@@ -209,7 +211,9 @@ export class Connection {
 
             if (err) {
                 this._executingCounter--
-                return Future.reject(err)
+
+                query.error(err)
+                return query.resolvers.future
             }
 
             return query.resolvers.future
@@ -259,7 +263,9 @@ export class Connection {
 
             if (err) {
                 this._executingCounter--
-                return Future.reject(err)
+
+                query.error(err)
+                return query.resolvers.future
             }
 
             return query.resolvers.future
@@ -287,7 +293,9 @@ export class Connection {
 
             if (err) {
                 this._executingCounter--
-                return Future.reject(err)
+                
+                query.error(err)
+                return query.resolvers.future
             }
 
             return query.resolvers.future
