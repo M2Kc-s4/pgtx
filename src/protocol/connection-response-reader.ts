@@ -2,8 +2,6 @@ import { AuthenticationCode, DataTypeOid, DataTypeOids, INT4Length, ResponseType
 import { ChannelName, ColumnDescription, ParameterDescription } from "../types"
 import { PostgresError } from "../error"
 
-
-const columnValueCache = new Map<number, Map<number, string>>()
 const POSTGRES_EPOCH_MS = 946684800000
 
 
@@ -224,17 +222,70 @@ export class ConnectionResponseBuffer {
     }
 
 
-    getBufferHash(length: number) {
-        let hash = 2166136261
-        const end = this.caret + length
+    readBinaryArray(fieldLength: number, elementParser: (length: number) => any): any[] {
+        if (fieldLength === 0) return []
 
-        for (let i = this.caret; i < end; i++) {
-            hash ^= this.buffer[i]
-            hash += (hash << 1) + (hash << 4) + (hash << 7) + (hash << 8) + (hash << 24)
+        const ndims = this.readInt32()
+        const hasNull = this.readInt32()
+        const elementOid = this.readInt32()
+
+        if (ndims === 0) return []
+        if (ndims > 1) {
+            for (let d = 1; d < ndims; d++) {
+                this.readInt32()
+                this.readInt32()
+            }
         }
 
-        return hash >>> 0
+        const dimLength = this.readInt32()
+        const lbound = this.readInt32()
+
+        const result = new Array(dimLength)
+        for (let i = 0; i < dimLength; i++) {
+            const itemLength = this.readInt32()
+            if (itemLength === -1) {
+                result[i] = null
+            } else {
+                result[i] = elementParser(itemLength)
+            }
+        }
+        return result
     }
+
+
+    readBinaryInet(fieldLength: number): string {
+        const family = this.readByte()
+        const bits = this.readByte()
+        const isCidr = this.readByte()
+        const nb = this.readByte()
+
+        if (nb === 4) {
+            const b1 = this.readByte()
+            const b2 = this.readByte()
+            const b3 = this.readByte()
+            const b4 = this.readByte()
+            return `${b1}.${b2}.${b3}.${b4}`
+        } else if (nb === 16) {
+            const parts: string[] = [];
+            for (let i = 0; i < 8; i++) {
+                parts.push(this.readInt16().toString(16))
+            }
+            return parts.join(':')
+        }
+        
+        this.skipBytes(fieldLength - 4)
+        return ''
+    }
+
+    
+    readBinaryPoint(): { x: number; y: number } {
+        return {
+            x: this.readFloat64(),
+            y: this.readFloat64()
+        };
+    }
+
+
 
     readType() {
         return {type: this.readByte() as ResponseType, length: this.readInt32() - INT4Length}
@@ -377,32 +428,7 @@ export class ConnectionResponseBuffer {
                 case DataTypeOids.Varchar:
                 case DataTypeOids.Char:
                 case DataTypeOids.Bpchar: {
-                    if (fieldLength <= 32) {
-                        let cacheForColumn = columnValueCache.get(i)
-                        if (!cacheForColumn) {
-                            cacheForColumn = new Map<number, string>()
-                            columnValueCache.set(i, cacheForColumn)
-                        }
-
-                        const byteHash = this.getBufferHash(fieldLength)
-                        let cachedString = cacheForColumn.get(byteHash)
-
-                        if (cachedString === undefined) {
-                            cachedString = this.readRawString(fieldLength)
-                            if (cacheForColumn.size > 512) {
-                                cacheForColumn.clear()
-                            }
-                            
-                            cacheForColumn.set(byteHash, cachedString)
-                        } 
-                        else {
-                            this.skipBytes(fieldLength)
-                        }
-                        row[key] = cachedString
-                    } 
-                    else {
-                        row[key] = this.readRawString(fieldLength)
-                    }
+                    row[key] = this.readRawString(fieldLength)
                 } break
 
                 case DataTypeOids.Int2: {
@@ -465,6 +491,28 @@ export class ConnectionResponseBuffer {
 
                 case DataTypeOids.Numeric: {
                     row[key] = this.readNumeric()
+                } break
+
+                case DataTypeOids.Point: {
+                    row[key] = this.readBinaryPoint()
+                } break
+
+                case DataTypeOids.Inet:
+                case DataTypeOids.Cidr: {
+                    row[key] = this.readBinaryInet(fieldLength)
+                } break
+
+                case DataTypeOids.Int4Array: {
+                    row[key] = this.readBinaryArray(fieldLength, () => this.readInt32())
+                } break
+
+                case DataTypeOids.TextArray:
+                case DataTypeOids.VarcharArray: { 
+                    row[key] = this.readBinaryArray(fieldLength, (len) => this.readRawString(len))
+                } break
+
+                case DataTypeOids.BoolArray: {
+                    row[key] = this.readBinaryArray(fieldLength, () => this.readBool())
                 } break
 
                 default: {

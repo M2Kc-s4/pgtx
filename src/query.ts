@@ -1,17 +1,12 @@
 import { Future, Resolvers } from "fluent-future";
-import { ColumnDescription, QueryText, Row, StatementName } from "./types";
+import { ColumnDescription, QueryText, Row, StatementMeta, StatementName } from "./types";
 import { ErrQueryTimeout, PostgresError } from "./error";
 
 
 export abstract class Query {
     protected _timer?: NodeJS.Timeout
     
-    constructor(
-        public statement: StatementName,
-        public text: QueryText,
-        public args: unknown[],
-        timeout: number
-    ) {
+    constructor(timeout: number) {
         this._timer = setTimeout(() => {
             this.error(ErrQueryTimeout)
         }, timeout)
@@ -28,14 +23,14 @@ export class CollectQuery<T extends Row> extends Query {
     private _rows: T[] = []
 
     constructor(
-        statement: StatementName,
-        text: QueryText,
-        args: unknown[],
+        public meta: StatementMeta,
+        public text: QueryText,
+        public args: unknown[],
         public columns: ColumnDescription[] | null,
+        public resolvers: Resolvers<Future<T[], PostgresError>>,
         timeout: number,
-        public resolvers: Resolvers<Future<T[], PostgresError>>
     )  {
-        super(statement, text, args, timeout)
+        super(timeout)
     }    
 
 
@@ -59,13 +54,13 @@ export class CollectQuery<T extends Row> extends Query {
 
 export class ExecuteQuery extends Query {
     constructor(
-        statement: StatementName,
-        text: QueryText,
-        args: unknown[],
+        public meta: StatementMeta,
+        public text: QueryText,
+        public args: unknown[],
+        public resolvers: Resolvers<Future<void, PostgresError>>,
         timeout: number,
-        public resolvers: Resolvers<Future<void, PostgresError>>
     ) {
-        super(statement, text, args, timeout)
+        super(timeout)
     }
 
     error(cause: PostgresError) {
@@ -83,14 +78,14 @@ export class ExecuteQuery extends Query {
 
 export class StreamQuery<T> extends Query {
     constructor(
-        statement: StatementName,
-        text: QueryText,
-        args: unknown[],
+        public meta: StatementMeta,
+        public text: QueryText,
+        public args: unknown[],
         public controller: ReadableStreamDefaultController<T>,
         public columns: ColumnDescription[] | null,
         timeout: number
     ) {
-        super(statement, text, args, timeout)
+        super(timeout)
     }
 
 
@@ -115,4 +110,26 @@ export class StreamQuery<T> extends Query {
     }
 }
 
-export type PostgresQuery = CollectQuery<any> | StreamQuery<any> | ExecuteQuery
+export class ParseQuery extends Query {
+    constructor(
+        public meta: StatementMeta,
+        public text: QueryText,
+        public resolvers: Resolvers<Future<StatementMeta, PostgresError>>,
+        timeout: number
+    )  {
+        super(timeout)
+    }    
+    
+    error(cause: PostgresError) {
+        clearTimeout(this._timer)
+        this.resolvers.reject(cause)
+    }
+
+
+    complete() {
+        clearTimeout(this._timer)
+        this.resolvers.resolve(this.meta)
+    }
+}
+
+export type PostgresQuery = ParseQuery | CollectQuery<any> | StreamQuery<any> | ExecuteQuery
