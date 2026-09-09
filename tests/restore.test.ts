@@ -2,7 +2,7 @@ import { after, describe, it } from "node:test"
 import { ErrConnectionClosed, PostgresError } from "../src/error"
 import assert, { rejects } from "assert"
 import { Future, Ok } from "fluent-future"
-import { Pool } from "../src"
+import { Pool, sql } from "../src"
 
 describe("Connection reconnect and close test", async () => {
     const pool = new Pool({
@@ -55,7 +55,7 @@ describe("Connection reconnect and close test", async () => {
         it("should clear cached prepared statement metadata on reconnect", async () => {
             await conn.query`SELECT 1 as value`
 
-            const parsedBefore = Object.keys(conn['_parsed']).length
+            const parsedBefore = conn['_parsed'].size
             assert.ok(parsedBefore > 0)
 
             conn['_socket'].destroy()
@@ -64,7 +64,7 @@ describe("Connection reconnect and close test", async () => {
 
             const result = await conn.query`SELECT 1 as value`
             
-            assert.ok(Object.keys(conn['_parsed']).length === 1)
+            assert.ok(conn['_parsed'].size === 1)
             assert.strictEqual(result[0].value, 1)
         })
 
@@ -103,8 +103,8 @@ describe("Connection reconnect and close test", async () => {
                 attempts++
 
                 if (attempts === 1) {
-                    conn['_parsed'] = {}
-                    conn['_parsing'] = {}
+                    conn['_parsed'].clear()
+                    conn['_parsing'].clear()
                     return Future.reject(new PostgresError("simulated reconnect failure"))
                 }
 
@@ -241,6 +241,25 @@ describe("Connection reconnect and close test", async () => {
             await new Promise(r => setTimeout(r, 50))
             assert.strictEqual(reconnectCalled, false)
             
+            pool.release(conn)
+        })
+
+        it("should not close before the follow-up query queued right after Parse resolves (parse/bind race window)", async () => {
+            const conn = await pool.acquire()
+
+            const pending = conn.query`SELECT pg_sleep(0.05)::text, 12345 as value -- race-${sql.literal(Date.now().toString())}-${sql.literal(Math.random().toString())}`
+
+            const closePromise = conn.close()
+
+            assert.ok(conn.isClosed)
+            assert.ok(!conn.isOpened)
+
+            const result = await pending
+            assert.strictEqual(result[0].value, 12345)
+
+            await closePromise
+            assert.ok(conn.isClosed)
+
             pool.release(conn)
         })
     })

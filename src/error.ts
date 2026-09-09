@@ -1,4 +1,5 @@
 import { DataTypeOid, DataTypeOids } from "./protocol/constants"
+import { handlers } from "./protocol/types"
 
 export class PostgresError extends Error {
     constructor(
@@ -73,18 +74,55 @@ export const ErrDatabaseNotFound = new PostgresError('Database with that dsn not
 export const ErrUntrustedCertificate = new PostgresError("Database SSL certificate is untrusted or self-signed")
 export const ErrCertificateFileNotFound = new PostgresError("The SSL certificate file specified in caPath was not found")
 
+
+function describeValue(value: unknown): string {
+    if (value === null) return 'null'
+    if (value === undefined) return 'undefined'
+    if (typeof value === 'bigint') return `${value}n`
+    if (typeof value === 'string') {
+        return value.length > 60 ? `${JSON.stringify(value.slice(0, 60))}…` : JSON.stringify(value)
+    }
+    if (Buffer.isBuffer(value) || value instanceof Uint8Array) {
+        return `Uint8Array(length=${value.length})`
+    }
+    if (value instanceof Date) {
+        return `Date(${isNaN(value.getTime()) ? 'Invalid Date' : value.toISOString()})`
+    }
+    if (Array.isArray(value)) {
+        const preview = value.slice(0, 5).map(describeValue).join(', ')
+        return `[${preview}${value.length > 5 ? ', …' : ''}] (length=${value.length})`
+    }
+    if (typeof value === 'object') {
+        try {
+            const json = JSON.stringify(value)
+            return json.length > 120 ? `${json.slice(0, 120)}…` : json
+        } catch {
+            return Object.prototype.toString.call(value)
+        }
+    }
+    return String(value)
+}
+
+
 export function createBindTypeError(index: number, expectedType: DataTypeOid, actualValue: unknown): PostgresError {
-    const position = (index + 1).toString()
-    const actualType = actualValue === null ? 'null' : typeof actualValue
-    
-    const message = `Bind error: Parameter $${position} type mismatch. Expected ${expectedType}, received "${actualType}(${actualValue})".`
-    
+    const position = index + 1
+    const info = handlers[expectedType]
+
+    const expectedPgType = info?.pgType ?? `oid ${expectedType}`
+    const expectedJsShape = info?.jsShape ?? '(тип не описан в справочнике)'
+
+    const message =
+        `Bind error: Parameter $${position} type mismatch. ` +
+        `Expected PostgreSQL type "${expectedPgType}" (${expectedJsShape}), received: ${describeValue(actualValue)}.`
+
     return new PostgresError(
         message,
-        '22000',                                            // code
-        `The parameter at position $${position} failed client-side binary validation.`, // detail
-        'ERROR',                                            // severity
-        'writeBind() inside driver',                        // where
-        `Ensure that the argument passed as $${position} matches the PostgreSQL schema requirements.` // hint
+        '22000',
+        `Parameter $${position} failed client-side binary validation for pg type "${expectedPgType}".`,
+        'ERROR',
+        'writeBind() inside driver',
+        `Pass a value matching ${expectedJsShape} for $${position}.`,
+        '',
+        expectedPgType,
     )
 }

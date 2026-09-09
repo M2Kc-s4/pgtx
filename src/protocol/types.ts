@@ -10,7 +10,11 @@ type FieldReader = (
     int8toBigint: boolean
 ) => unknown
 
-interface BindHandler {
+export interface BindHandler {
+    /** Имя типа в PostgreSQL — используется в сообщениях об ошибках. */
+    pgType: string
+    /** Ожидаемая JS-форма значения — используется в сообщениях об ошибках. */
+    jsShape: string
     validate: BindValidator
     write: BindWriter
     read: FieldReader
@@ -25,6 +29,8 @@ const isPoint = (value: unknown): value is { x: number; y: number } =>
 
 export const handlers: Partial<Record<DataTypeOid, BindHandler>> = {
     [DataTypeOids.Bool]: {
+        pgType: 'bool',
+        jsShape: 'boolean',
         validate: (v): v is boolean => typeof v === 'boolean',
         write: (req, v) => req.writeBinaryBool(v),
         read: (res) => res.readBool(),
@@ -32,6 +38,8 @@ export const handlers: Partial<Record<DataTypeOid, BindHandler>> = {
 
 
     [DataTypeOids.Text]: {
+        pgType: 'text',
+        jsShape: 'string',
         validate: (v): v is string => typeof v === 'string',
         write: (req, v) => req.writeBinaryString(v),
         read: (res, len) => res.readRawString(len),
@@ -39,6 +47,8 @@ export const handlers: Partial<Record<DataTypeOid, BindHandler>> = {
 
 
     [DataTypeOids.Varchar]: {
+        pgType: 'varchar',
+        jsShape: 'string',
         validate: (v): v is string => typeof v === 'string',
         write: (req, v) => req.writeBinaryString(v),
         read: (res, len) => res.readRawString(len),
@@ -46,6 +56,8 @@ export const handlers: Partial<Record<DataTypeOid, BindHandler>> = {
 
 
     [DataTypeOids.Char]: {
+        pgType: 'char',
+        jsShape: 'string',
         validate: (v): v is string => typeof v === 'string',
         write: (req, v) => req.writeBinaryString(v),
         read: (res, len) => res.readRawString(len),
@@ -53,6 +65,8 @@ export const handlers: Partial<Record<DataTypeOid, BindHandler>> = {
 
 
     [DataTypeOids.Bpchar]: {
+        pgType: 'bpchar',
+        jsShape: 'string',
         validate: (v): v is string => typeof v === 'string',
         write: (req, v) => req.writeBinaryString(v),
         read: (res, len) => res.readRawString(len),
@@ -60,6 +74,8 @@ export const handlers: Partial<Record<DataTypeOid, BindHandler>> = {
 
 
     [DataTypeOids.Name]: {
+        pgType: 'name',
+        jsShape: 'string',
         validate: (v): v is string =>
             typeof v === 'string' && Buffer.byteLength(v, 'utf-8') <= 63,
         write: (req, v) => req.writeBinaryString(v),
@@ -68,6 +84,8 @@ export const handlers: Partial<Record<DataTypeOid, BindHandler>> = {
 
 
     [DataTypeOids.Int2]: {
+        pgType: 'int2',
+        jsShape: 'number (-32768..32767)',
         validate: (v): v is number =>
             typeof v === 'number' &&
             Number.isInteger(v) &&
@@ -79,6 +97,8 @@ export const handlers: Partial<Record<DataTypeOid, BindHandler>> = {
 
 
     [DataTypeOids.Int4]: {
+        pgType: 'int4',
+        jsShape: 'number (-2147483648..2147483647)',
         validate: (v): v is number =>
             typeof v === 'number' &&
             Number.isInteger(v) &&
@@ -90,6 +110,8 @@ export const handlers: Partial<Record<DataTypeOid, BindHandler>> = {
 
 
     [DataTypeOids.Int8]: {
+        pgType: 'int8',
+        jsShape: 'bigint | number (safe integer)',
         validate: (v): v is number | bigint =>
             typeof v === 'bigint' ||
             (typeof v === 'number' && Number.isSafeInteger(v)),
@@ -103,6 +125,8 @@ export const handlers: Partial<Record<DataTypeOid, BindHandler>> = {
 
 
     [DataTypeOids.Float4]: {
+        pgType: 'float4',
+        jsShape: 'number',
         validate: (v): v is number =>
             typeof v === 'number' && Number.isFinite(v),
         write: (req, v) => req.writeBinaryFloat4(v),
@@ -111,6 +135,8 @@ export const handlers: Partial<Record<DataTypeOid, BindHandler>> = {
 
 
     [DataTypeOids.Float8]: {
+        pgType: 'float8',
+        jsShape: 'number',
         validate: (v): v is number =>
             typeof v === 'number' && Number.isFinite(v),
         write: (req, v) => req.writeBinaryFloat8(v),
@@ -119,6 +145,8 @@ export const handlers: Partial<Record<DataTypeOid, BindHandler>> = {
 
 
     [DataTypeOids.Bytea]: {
+        pgType: 'bytea',
+        jsShape: 'Buffer | Uint8Array',
         validate: (v): v is Uint8Array =>
             Buffer.isBuffer(v) || v instanceof Uint8Array,
         write: (req, v) => req.writeBinaryBytea(v),
@@ -127,6 +155,8 @@ export const handlers: Partial<Record<DataTypeOid, BindHandler>> = {
 
 
     [DataTypeOids.Timestamp]: {
+        pgType: 'timestamp',
+        jsShape: 'Date',
         validate: (v): v is Date => v instanceof Date,
         write: (req, v) => req.writeBinaryTimestamp(v),
         read: (res) => res.readBinaryTimestamp(),
@@ -134,13 +164,17 @@ export const handlers: Partial<Record<DataTypeOid, BindHandler>> = {
 
 
     [DataTypeOids.Timestamptz]: {
+        pgType: 'timestamptz',
+        jsShape: 'Date',
         validate: (v): v is Date => v instanceof Date,
         write: (req, v) => req.writeBinaryTimestamp(v),
         read: (res) => res.readBinaryTimestamp(),
     },
 
-    
+
     [DataTypeOids.Point]: {
+        pgType: 'point',
+        jsShape: '{ x: number, y: number }',
         validate: isPoint,
         write: (req, v) => req.writeBinaryPoint(v),
         read: (res) => res.readBinaryPoint(),
@@ -148,6 +182,8 @@ export const handlers: Partial<Record<DataTypeOid, BindHandler>> = {
 
 
     [DataTypeOids.Numeric]: {
+        pgType: 'numeric',
+        jsShape: 'string ("[-]digits[.digits]")',
         validate: (v): v is string =>
             (typeof v === 'string' && /^-?\d*\.?\d+$/.test(v)),
         write: (req, v) => req.writeBinaryNumeric(v),
@@ -156,6 +192,8 @@ export const handlers: Partial<Record<DataTypeOid, BindHandler>> = {
 
 
     [DataTypeOids.Date]: {
+        pgType: 'date',
+        jsShape: 'Date',
         validate: (v): v is Date => v instanceof Date,
         write: (req, v) => req.writeBinaryDate(v),
         read: (res) => res.readBinaryDate(),
@@ -163,28 +201,30 @@ export const handlers: Partial<Record<DataTypeOid, BindHandler>> = {
 
 
     [DataTypeOids.Time]: {
+        pgType: 'time',
+        jsShape: 'string ("HH:MM:SS.mmm")',
         validate: (v): v is string =>
             typeof v === 'string' &&
             /^(\d{2}):(\d{2}):(\d{2})\.(\d{3})$/.test(v),
-
         write: (req, v) => req.writeBinaryTime(v),
-
         read: (res) => res.readBinaryTime(),
     },
 
-    
+
     [DataTypeOids.Timetz]: {
+        pgType: 'timetz',
+        jsShape: 'string ("HH:MM:SS.mmm±HH:MM")',
         validate: (v): v is string =>
             typeof v === 'string' &&
             /^(\d{2}):(\d{2}):(\d{2})\.(\d{3})([+-])(\d{2}):(\d{2})$/.test(v),
-
         write: (req, v) => req.writeBinaryTimetz(v),
-
         read: (res) => res.readBinaryTimetz(),
     },
 
 
     [DataTypeOids.Interval]: {
+        pgType: 'interval',
+        jsShape: '{ months: number, days: number, microseconds: number | bigint }',
         validate: (v): v is { months: number; days: number; microseconds: number | bigint } =>
             v !== null &&
             typeof v === 'object' &&
@@ -198,6 +238,8 @@ export const handlers: Partial<Record<DataTypeOid, BindHandler>> = {
 
 
     [DataTypeOids.Json]: {
+        pgType: 'json',
+        jsShape: 'unknown (JSON-serializable)',
         validate: (_v): _v is unknown => true,
         write: (req, v) => req.writeBinaryJson(v),
         read: (res, len) => res.readBinaryJson(len),
@@ -205,6 +247,8 @@ export const handlers: Partial<Record<DataTypeOid, BindHandler>> = {
 
 
     [DataTypeOids.Jsonb]: {
+        pgType: 'jsonb',
+        jsShape: 'unknown (JSON-serializable)',
         validate: (_v): _v is unknown => true,
         write: (req, v) => req.writeBinaryJsonb(v),
         read: (res, len) => res.readBinaryJsonb(len),
@@ -212,6 +256,8 @@ export const handlers: Partial<Record<DataTypeOid, BindHandler>> = {
 
 
     [DataTypeOids.Uuid]: {
+        pgType: 'uuid',
+        jsShape: 'string ("xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx")',
         validate: (v): v is string =>
             typeof v === 'string' &&
             /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(v),
@@ -221,6 +267,8 @@ export const handlers: Partial<Record<DataTypeOid, BindHandler>> = {
 
 
     [DataTypeOids.Cidr]: {
+        pgType: 'cidr',
+        jsShape: 'string (IPv4/IPv6 address or CIDR)',
         validate: (v): v is string => typeof v === 'string',
         write: (req, v) => req.writeBinaryCidr(v),
         read: (res, len) => res.readBinaryInet(len),
@@ -228,6 +276,8 @@ export const handlers: Partial<Record<DataTypeOid, BindHandler>> = {
 
 
     [DataTypeOids.Inet]: {
+        pgType: 'inet',
+        jsShape: 'string (IPv4/IPv6 address or CIDR)',
         validate: (v): v is string => typeof v === 'string',
         write: (req, v) => req.writeBinaryInet(v),
         read: (res, len) => res.readBinaryInet(len),
@@ -235,6 +285,8 @@ export const handlers: Partial<Record<DataTypeOid, BindHandler>> = {
 
 
     [DataTypeOids.Macaddr]: {
+        pgType: 'macaddr',
+        jsShape: 'string ("xx:xx:xx:xx:xx:xx")',
         validate: (v): v is string =>
             typeof v === 'string' &&
             /^([0-9a-f]{2}:){5}[0-9a-f]{2}$/i.test(v),
@@ -244,6 +296,8 @@ export const handlers: Partial<Record<DataTypeOid, BindHandler>> = {
 
 
     [DataTypeOids.Oid]: {
+        pgType: 'oid',
+        jsShape: 'number',
         validate: (v): v is number => typeof v === 'number' && Number.isInteger(v) && v >= 0,
         write: (req, v) => req.writeBinaryOid(v),
         read: (res) => res.readBinaryOid(),
@@ -251,6 +305,8 @@ export const handlers: Partial<Record<DataTypeOid, BindHandler>> = {
 
 
     [DataTypeOids.Xid]: {
+        pgType: 'xid',
+        jsShape: 'number',
         validate: (v): v is number => typeof v === 'number' && Number.isInteger(v) && v >= 0,
         write: (req, v) => req.writeBinaryXid(v),
         read: (res) => res.readBinaryXid(),
@@ -258,6 +314,8 @@ export const handlers: Partial<Record<DataTypeOid, BindHandler>> = {
 
 
     [DataTypeOids.Cid]: {
+        pgType: 'cid',
+        jsShape: 'number',
         validate: (v): v is number => typeof v === 'number' && Number.isInteger(v) && v >= 0,
         write: (req, v) => req.writeBinaryCid(v),
         read: (res) => res.readBinaryCid(),
@@ -265,6 +323,8 @@ export const handlers: Partial<Record<DataTypeOid, BindHandler>> = {
 
 
     [DataTypeOids.Regproc]: {
+        pgType: 'regproc',
+        jsShape: 'number',
         validate: (v): v is number => typeof v === 'number' && Number.isInteger(v) && v >= 0,
         write: (req, v) => req.writeBinaryRegproc(v),
         read: (res) => res.readBinaryRegproc(),
@@ -272,6 +332,8 @@ export const handlers: Partial<Record<DataTypeOid, BindHandler>> = {
 
 
     [DataTypeOids.Lseg]: {
+        pgType: 'lseg',
+        jsShape: '{ a: Point, b: Point }',
         validate: (v): v is { a: { x: number; y: number }; b: { x: number; y: number } } =>
             v !== null && typeof v === 'object' &&
             isPoint((v as any).a) && isPoint((v as any).b),
@@ -281,6 +343,8 @@ export const handlers: Partial<Record<DataTypeOid, BindHandler>> = {
 
 
     [DataTypeOids.Path]: {
+        pgType: 'path',
+        jsShape: '{ closed: boolean, points: Point[] }',
         validate: (v): v is { closed: boolean; points: { x: number; y: number }[] } =>
             v !== null && typeof v === 'object' &&
             typeof (v as any).closed === 'boolean' &&
@@ -292,6 +356,8 @@ export const handlers: Partial<Record<DataTypeOid, BindHandler>> = {
 
 
     [DataTypeOids.Box]: {
+        pgType: 'box',
+        jsShape: '{ high: Point, low: Point }',
         validate: (v): v is { high: { x: number; y: number }; low: { x: number; y: number } } =>
             v !== null && typeof v === 'object' &&
             isPoint((v as any).high) && isPoint((v as any).low),
@@ -301,6 +367,8 @@ export const handlers: Partial<Record<DataTypeOid, BindHandler>> = {
 
 
     [DataTypeOids.Polygon]: {
+        pgType: 'polygon',
+        jsShape: '{ points: Point[] }',
         validate: (v): v is { points: { x: number; y: number }[] } =>
             v !== null && typeof v === 'object' &&
             Array.isArray((v as any).points) &&
@@ -311,6 +379,8 @@ export const handlers: Partial<Record<DataTypeOid, BindHandler>> = {
 
 
     [DataTypeOids.Line]: {
+        pgType: 'line',
+        jsShape: '{ a: number, b: number, c: number }',
         validate: (v): v is { a: number; b: number; c: number } =>
             v !== null && typeof v === 'object' &&
             typeof (v as any).a === 'number' &&
@@ -321,8 +391,9 @@ export const handlers: Partial<Record<DataTypeOid, BindHandler>> = {
     },
 
 
-
     [DataTypeOids.BoolArray]: {
+        pgType: 'bool[]',
+        jsShape: '(boolean | null)[]',
         validate: (v): v is (boolean | null | undefined)[] =>
             Array.isArray(v) && v.every(el => el == null || typeof el === 'boolean'),
         write: (req, v) => req.writeBinaryBoolArray(v),
@@ -331,6 +402,8 @@ export const handlers: Partial<Record<DataTypeOid, BindHandler>> = {
 
 
     [DataTypeOids.Int2Array]: {
+        pgType: 'int2[]',
+        jsShape: '(number | null)[]',
         validate: (v): v is (number | null | undefined)[] =>
             Array.isArray(v) && v.every(el =>
                 el == null || (typeof el === 'number' && Number.isInteger(el) && el >= -32768 && el <= 32767)
@@ -341,6 +414,8 @@ export const handlers: Partial<Record<DataTypeOid, BindHandler>> = {
 
 
     [DataTypeOids.Int4Array]: {
+        pgType: 'int4[]',
+        jsShape: '(number | null)[]',
         validate: (v): v is (number | null | undefined)[] =>
             Array.isArray(v) && v.every(el =>
                 el == null || (typeof el === 'number' && Number.isInteger(el) && el >= -2147483648 && el <= 2147483647)
@@ -351,6 +426,8 @@ export const handlers: Partial<Record<DataTypeOid, BindHandler>> = {
 
 
     [DataTypeOids.Int8Array]: {
+        pgType: 'int8[]',
+        jsShape: '(number | bigint | null)[]',
         validate: (v): v is (number | bigint | null | undefined)[] =>
             Array.isArray(v) && v.every(el =>
                 el == null ||
@@ -364,6 +441,8 @@ export const handlers: Partial<Record<DataTypeOid, BindHandler>> = {
 
 
     [DataTypeOids.TextArray]: {
+        pgType: 'text[]',
+        jsShape: '(string | null)[]',
         validate: (v): v is (string | null | undefined)[] =>
             Array.isArray(v) && v.every(el => el == null || typeof el === 'string'),
         write: (req, v) => req.writeBinaryTextArray(v),
@@ -372,6 +451,8 @@ export const handlers: Partial<Record<DataTypeOid, BindHandler>> = {
 
 
     [DataTypeOids.VarcharArray]: {
+        pgType: 'varchar[]',
+        jsShape: '(string | null)[]',
         validate: (v): v is (string | null | undefined)[] =>
             Array.isArray(v) && v.every(el => el == null || typeof el === 'string'),
         write: (req, v) => req.writeBinaryVarcharArray(v),
@@ -380,6 +461,8 @@ export const handlers: Partial<Record<DataTypeOid, BindHandler>> = {
 
 
     [DataTypeOids.JsonArray]: {
+        pgType: 'json[]',
+        jsShape: 'unknown[]',
         validate: (v): v is unknown[] => Array.isArray(v),
         write: (req, v) => req.writeBinaryJsonArray(v),
         read: (res, len) => res.readBinaryArray(len, (l) => res.readBinaryJson(l)),
@@ -387,6 +470,8 @@ export const handlers: Partial<Record<DataTypeOid, BindHandler>> = {
 
 
     [DataTypeOids.JsonbArray]: {
+        pgType: 'jsonb[]',
+        jsShape: 'unknown[]',
         validate: (v): v is unknown[] => Array.isArray(v),
         write: (req, v) => req.writeBinaryJsonbArray(v),
         read: (res, len) => res.readBinaryArray(len, (l) => res.readBinaryJsonb(l)),
@@ -394,6 +479,8 @@ export const handlers: Partial<Record<DataTypeOid, BindHandler>> = {
 
 
     [DataTypeOids.UuidArray]: {
+        pgType: 'uuid[]',
+        jsShape: '(string | null)[]',
         validate: (v): v is (string | null | undefined)[] =>
             Array.isArray(v) && v.every(el =>
                 el == null || (typeof el === 'string' && /^[0-9a-f-]{36}$/i.test(el))
@@ -404,6 +491,8 @@ export const handlers: Partial<Record<DataTypeOid, BindHandler>> = {
 
 
     [DataTypeOids.NumericArray]: {
+        pgType: 'numeric[]',
+        jsShape: '(string | null)[]',
         validate: (v): v is (number | string | null | undefined)[] =>
             Array.isArray(v) && v.every(el =>
                 el == null ||

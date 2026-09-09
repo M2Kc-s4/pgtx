@@ -29,7 +29,7 @@
 | `bool[]`                               | `(boolean \| null)[]`                                              | `(boolean \| null)[]`                                    |                                        |
 | `int2[]`                               | `(number \| null)[]`                                               | `(number \| null)[]`                                     |                                        |
 | `int4[]`                               | `(number \| null)[]`                                               | `(number \| null)[]`                                     |                                        |
-| `int8[]`                               | `(number \| bigint \| null)[]`                                     | `(number \| bigint \| null)[]`*                          |                                        |
+| `int8[]`                               | `(number \| bigint \| null)[]`                                     | `(number \| null)[] \| (bigint \| null)[]`*                          |                                        |
 | `text[]` / `varchar[]`                 | `(string \| null)[]`                                               | `(string \| null)[]`                                     |                                        |
 | `json[]` / `jsonb[]`                   | `unknown[]`                                                        | `unknown[]`                                              |                                        |
 | `uuid[]`                               | `(string \| null)[]`                                               | `(string \| null)[]`                                     | UUID format                            |

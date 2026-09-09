@@ -14,6 +14,7 @@ import { nextTick } from "process"
 import { authorizeSocket, createSocket, upgradeSocket } from "./protocol/socket-authorization"
 import { ConnectionResponseBuffer } from "./protocol/connection-response-reader"
 import { ConnectionRequestBuffer } from "./protocol/connection-request-writer"
+import { error } from "console"
 
 
 const shedule = {
@@ -39,7 +40,6 @@ export class Connection {
     private _writer = ConnectionRequestBuffer.new(65536)
     private _sheduled = false
     private _queue = new Queue<PostgresQuery>()
-    private _executingCounter = 0
 
     private _closing: Resolvers<Future<void, PostgresError>> | null = null
     private _closed = false
@@ -47,14 +47,48 @@ export class Connection {
 
     private _socket: SocketConnector
 
-    private _parsed: Record<QueryText, StatementMeta> = {}
-    private _parsing: Record<QueryText, Future<StatementMeta, PostgresError>> = {}
+    private _parsed = new Map<QueryText, StatementMeta>()
+    private _parsing = new Map<QueryText, Future<StatementMeta, PostgresError>>()
 
     private _listeningCallbacks = new Map<ChannelName, Set<(payload: string) => void>>()
     private _stmtCounter = 0
 
     private _nextStatement() {
         return `s-${this._stmtCounter++}` as StatementName
+    }
+
+
+    private _logError(error: PostgresError) {
+        if (this.config.logLevel === 'error' || this.config.logLevel === 'notice' || this.config.logLevel === 'query') { 
+            console.log( 
+                `\n\x1b[31m┌─ ERROR ────────────────────────────────────────\x1b[0m\n` 
+                + `\x1b[31m│\x1b[0m ${error}\n` 
+                + `\x1b[31m└────────────────────────────────────────────────\x1b[0m\n` 
+            ) 
+        }
+    }
+
+
+    private _logQuery(text: QueryText, args: unknown[]) {
+        if (this.config.logLevel === 'query') { 
+            console.log(
+                `\n\x1b[36m┌─ QUERY ─────────────────────────────────────────\x1b[0m\n`
+                + `\x1b[36m│\x1b[0m ${text}\n` 
+                + `${args.length !== 0 ? `\x1b[36m│\x1b[0m \x1b[90mArguments:\x1b[0m [${args}]\n` : ''}` 
+                + `\x1b[36m└────────────────────────────────────────────────\x1b[0m` 
+            ) 
+        }
+    }
+
+
+    private _logNotice(notice: PostgresError) {
+        if (this.config.logLevel === 'notice' || this.config.logLevel === 'query') { 
+            console.log( 
+                `\n\x1b[33m┌─ NOTICE ───────────────────────────────────────\x1b[0m\n` 
+                + `\x1b[33m│\x1b[0m ${notice}\n` 
+                + `\x1b[33m└────────────────────────────────────────────────\x1b[0m\n` 
+            ) 
+        }
     }
 
 
@@ -159,29 +193,19 @@ export class Connection {
 
 
     private _performQuery<T extends Row>(text: QueryText, args: unknown[], resolvers: Resolvers<Future<T[], PostgresError>>): Future<T[], PostgresError> {
-        if (this.config.logLevel === 'query') { 
-            console.log(
-                `\n\x1b[36m┌─ QUERY ─────────────────────────────────────────\x1b[0m\n`
-                + `\x1b[36m│\x1b[0m ${text}\n` 
-                + `${args.length !== 0 ? `\x1b[36m│\x1b[0m \x1b[90mArguments:\x1b[0m [${args}]\n` : ''}` 
-                + `\x1b[36m└────────────────────────────────────────────────\x1b[0m` 
-            ) 
-        }
+        this._logQuery(text, args)
 
-        this._executingCounter++
-
-        const parsed = this._parsed[text]
+        const parsed = this._parsed.get(text)
         if (parsed) {
             const query = new CollectQuery<T>(
                 parsed, text, args, parsed.columns, resolvers, this.config.queryTimeout
             )
+
             const err = this._registerQuery(query)
 
             if (err) {
-                this._executingCounter--
-
                 query.error(err)
-                return query.resolvers.future
+                this._logError(err)
             }
 
             return query.resolvers.future
@@ -189,7 +213,7 @@ export class Connection {
 
         
 
-        if (!this._parsing[text]) {            
+        if (!this._parsing.has(text)) {            
             const parseQuery = new ParseQuery(
                 {statement: this._nextStatement(), columns: EMPTY_ARRAY, parameters: EMPTY_ARRAY}, 
                 text, Future.withResolvers(), this.config.queryTimeout 
@@ -198,10 +222,10 @@ export class Connection {
 
             this._registerQuery(parseQuery)
             
-            this._parsing[text] = parseQuery.resolvers.future
+            this._parsing.set(text, parseQuery.resolvers.future)
         }
 
-        const parsing = this._parsing[text]
+        const parsing = this._parsing.get(text)!
 
         return parsing.andThen(meta => {
             const query = new CollectQuery<T>(
@@ -210,10 +234,8 @@ export class Connection {
             const err = this._registerQuery(query)
 
             if (err) {
-                this._executingCounter--
-
                 query.error(err)
-                return query.resolvers.future
+                this._logError(err)
             }
 
             return query.resolvers.future
@@ -241,37 +263,26 @@ export class Connection {
 
 
     private _performExecute(text: QueryText, args: unknown[], resolvers: Resolvers<Future<void, PostgresError>>): Future<void, PostgresError> {
-        if (this.config.logLevel === 'query') { 
-            console.log( 
-                `\n\x1b[35m┌─ EXECUTE ──────────────────────────────────────\x1b[0m\n` 
-                + `\x1b[35m│\x1b[0m ${text}\n` 
-                + `${args.length !== 0 ? `\x1b[35m│\x1b[0m \x1b[90mArguments:\x1b[0m [${args}]\n` : ''}` 
-                + `\x1b[35m└────────────────────────────────────────────────\x1b[0m` 
-            ) 
-        }
+        this._logQuery(text, args)
 
-        
-        this._executingCounter++
-
-        const parsed = this._parsed[text]
+        const parsed = this._parsed.get(text)
 
         if (parsed) {
             const query = new ExecuteQuery(
                 parsed, text, args, resolvers, this.config.queryTimeout
             )
+
             const err = this._registerQuery(query)
 
             if (err) {
-                this._executingCounter--
-
                 query.error(err)
-                return query.resolvers.future
+                this._logError(err)
             }
 
             return query.resolvers.future
         }
 
-        if (!this._parsing[text]) {
+        if (!this._parsing.has(text)) {
             const parseQuery = new ParseQuery(
                 {statement: this._nextStatement(), columns: EMPTY_ARRAY, parameters: EMPTY_ARRAY}, 
                 text, Future.withResolvers(), this.config.queryTimeout 
@@ -280,22 +291,21 @@ export class Connection {
 
             this._registerQuery(parseQuery)
             
-            this._parsing[text] = parseQuery.resolvers.future
+            this._parsing.set(text, parseQuery.resolvers.future)
         }
 
-        const parsing = this._parsing[text]
+        const parsing = this._parsing.get(text)!
         
         return parsing.andThen(meta => {
             const query = new ExecuteQuery(
                 meta, text, args, resolvers, this.config.queryTimeout
             )
+
             const err = this._registerQuery(query)
 
             if (err) {
-                this._executingCounter--
-                
                 query.error(err)
-                return query.resolvers.future
+                this._logError(err)
             }
 
             return query.resolvers.future
@@ -338,19 +348,9 @@ export class Connection {
     
 
     private _performStream<T extends Row>(text: QueryText, args: unknown[], controller: ReadableStreamDefaultController<T>) {        
-        if (this.config.logLevel === 'query') { 
-            console.log( 
-                `\n\x1b[34m┌─ STREAM ───────────────────────────────────────\x1b[0m\n` 
-                + `\x1b[34m│\x1b[0m ${text}\n` 
-                + `${args.length !== 0 ? `\x1b[34m│\x1b[0m \x1b[90mArguments:\x1b[0m [${args}]\n` : ''}` 
-                + `\x1b[34m└────────────────────────────────────────────────\x1b[0m`
-            ) 
-        }
+        this._logQuery(text, args)
 
-        
-        this._executingCounter++
-
-        const parsed = this._parsed[text]
+        const parsed = this._parsed.get(text)
         if (parsed) {
             const query = new StreamQuery<T>(
                 parsed, text, args, 
@@ -361,14 +361,14 @@ export class Connection {
             const err = this._registerQuery(query)
 
             if (err) {
-                this._executingCounter--
                 controller.error(err)
+                this._logError(err)
             }
 
             return
         }
 
-        if (!this._parsing[text]) {
+        if (!this._parsing.has(text)) {
             const parseQuery = new ParseQuery(
                 {statement: this._nextStatement(), columns: EMPTY_ARRAY, parameters: EMPTY_ARRAY}, 
                 text, Future.withResolvers(), this.config.queryTimeout 
@@ -377,10 +377,10 @@ export class Connection {
 
             this._registerQuery(parseQuery)
             
-            this._parsing[text] = parseQuery.resolvers.future
+            this._parsing.set(text, parseQuery.resolvers.future)
         }
 
-        const parsing = this._parsing[text]
+        const parsing = this._parsing.get(text)!
 
         parsing
             .tap(meta => {
@@ -392,8 +392,8 @@ export class Connection {
                 const err = this._registerQuery(query)
 
                 if (err) {
-                    this._executingCounter--
                     controller.error(err)
+                    this._logError(err)
                 }
             })
             .tapErr(err => {
@@ -493,10 +493,9 @@ export class Connection {
 
     private _performReconnect() {
         this._socket.destroy()
-        this._parsed = {}
-        this._parsing = {}
+        this._parsed.clear()
+        this._parsing.clear()
         this._sheduled = false
-        this._executingCounter = 0
 
         while (this._queue.hasMore) {
             this._queue.shift.error(ErrConnectionReconnecting)
@@ -560,8 +559,8 @@ export class Connection {
 
                 query.meta.columns = columns
 
-                delete this._parsing[query.text]
-                this._parsed[query.text] = query.meta
+                this._parsing.delete(query.text)
+                this._parsed.set(query.text, query.meta)
 
                 query.complete()
             } break
@@ -570,8 +569,8 @@ export class Connection {
             case ResponseTypes.NoData: {
                 const query = this._currentQuery as ParseQuery
 
-                delete this._parsing[query.text]
-                this._parsed[query.text] = query.meta
+                this._parsing.delete(query.text)
+                this._parsed.set(query.text, query.meta)
 
                 query.complete()
             } break
@@ -596,30 +595,19 @@ export class Connection {
                 const query = this._currentQuery
                 
                 query.complete()
-                this._executingCounter--
             } break
 
 
             case ResponseTypes.ErrorResponse: {
                 const error = reader.readErrorResponse()
 
-                
-                if (this.config.logLevel === 'error' || this.config.logLevel === 'notice' || this.config.logLevel === 'query') { 
-                    console.log( 
-                        `\n\x1b[31m┌─ ERROR ────────────────────────────────────────\x1b[0m\n` 
-                        + `\x1b[31m│\x1b[0m ${error}\n` 
-                        + `\x1b[31m└────────────────────────────────────────────────\x1b[0m\n` 
-                    ) 
-                }
+                this._logError(error)
 
                 const query = this._currentQuery
 
-                if (error.isParseError) {
-                    delete this._parsing[query.text]
-                }
+                if (query instanceof ParseQuery) this._parsing.delete(query.text)
 
                 query.error(error)
-                this._executingCounter--
             } break
 
 
@@ -627,20 +615,14 @@ export class Connection {
                 reader.skipBytes(length)
                 this._queue.next()
 
-                this._closing && !this._executingCounter && this._closing.resolve()    
+                this._tryFinishClosing()
             } break
 
 
             case ResponseTypes.Notice: {
-                const message = reader.readErrorResponse()
+                const notice = reader.readErrorResponse()
                 
-                if (this.config.logLevel === 'notice' || this.config.logLevel === 'query') { 
-                    console.log( 
-                        `\n\x1b[33m┌─ NOTICE ───────────────────────────────────────\x1b[0m\n` 
-                        + `\x1b[33m│\x1b[0m ${message}\n` 
-                        + `\x1b[33m└────────────────────────────────────────────────\x1b[0m\n` 
-                    ) 
-                }
+                this._logNotice(notice)
             } break
 
 
@@ -674,6 +656,20 @@ export class Connection {
     }
 
 
+    private _tryFinishClosing() {
+        if (!this._closing) return
+        if (this._queue.hasMore) return
+
+        setTimeout(() => {
+            if (!this._closing) return
+
+            if (!this._queue.hasMore) {
+                this._closing.resolve()
+            }
+        }, 0)
+    }
+
+
     /**
      * Closes the connection, awaiting for all pending queries. Not usable afterward.
      */
@@ -682,12 +678,6 @@ export class Connection {
 
         if (this._closing) {
             return this._closing.future
-        }        
-
-        if (!this._executingCounter) {
-            this._closed = true
-            this._socket.destroy()
-            return Future.resolve()
         }
 
         const closing = Future.withResolvers<void, PostgresError>()
@@ -698,6 +688,8 @@ export class Connection {
             this._closed = true
             this._socket.destroy()
         })
+
+        this._tryFinishClosing()
 
         return closing.future
     }
