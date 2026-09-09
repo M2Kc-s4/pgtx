@@ -198,7 +198,7 @@ export class Connection {
         const parsed = this._parsed.get(text)
         if (parsed) {
             const query = new CollectQuery<T>(
-                parsed, text, args, parsed.columns, resolvers, this.config.queryTimeout
+                text, args, parsed, resolvers, this.config.queryTimeout
             )
 
             const err = this._registerQuery(query)
@@ -214,9 +214,14 @@ export class Connection {
         
 
         if (!this._parsing.has(text)) {            
+            const newMeta = {
+                statement: this._nextStatement(), 
+                columns: EMPTY_ARRAY, 
+                parameters: EMPTY_ARRAY
+            }
+
             const parseQuery = new ParseQuery(
-                {statement: this._nextStatement(), columns: EMPTY_ARRAY, parameters: EMPTY_ARRAY}, 
-                text, Future.withResolvers(), this.config.queryTimeout 
+                text, newMeta, Future.withResolvers(), this.config.queryTimeout 
                 
             )
 
@@ -229,7 +234,7 @@ export class Connection {
 
         return parsing.andThen(meta => {
             const query = new CollectQuery<T>(
-                meta, text, args, meta.columns, resolvers, this.config.queryTimeout
+                text, args, meta, resolvers, this.config.queryTimeout
             )
             const err = this._registerQuery(query)
 
@@ -269,7 +274,7 @@ export class Connection {
 
         if (parsed) {
             const query = new ExecuteQuery(
-                parsed, text, args, resolvers, this.config.queryTimeout
+                text, args, parsed, resolvers, this.config.queryTimeout
             )
 
             const err = this._registerQuery(query)
@@ -283,10 +288,14 @@ export class Connection {
         }
 
         if (!this._parsing.has(text)) {
+            const newMeta = {
+                statement: this._nextStatement(), 
+                columns: EMPTY_ARRAY, 
+                parameters: EMPTY_ARRAY
+            }
+
             const parseQuery = new ParseQuery(
-                {statement: this._nextStatement(), columns: EMPTY_ARRAY, parameters: EMPTY_ARRAY}, 
-                text, Future.withResolvers(), this.config.queryTimeout 
-                
+                text, newMeta, Future.withResolvers(), this.config.queryTimeout 
             )
 
             this._registerQuery(parseQuery)
@@ -298,7 +307,7 @@ export class Connection {
         
         return parsing.andThen(meta => {
             const query = new ExecuteQuery(
-                meta, text, args, resolvers, this.config.queryTimeout
+                text, args, meta, resolvers, this.config.queryTimeout
             )
 
             const err = this._registerQuery(query)
@@ -353,8 +362,7 @@ export class Connection {
         const parsed = this._parsed.get(text)
         if (parsed) {
             const query = new StreamQuery<T>(
-                parsed, text, args, 
-                controller, parsed.columns, 
+                text, args, parsed, controller, 
                 this.config.queryTimeout
             )
 
@@ -369,10 +377,10 @@ export class Connection {
         }
 
         if (!this._parsing.has(text)) {
+            const newMeta = {statement: this._nextStatement(), columns: EMPTY_ARRAY, parameters: EMPTY_ARRAY}
+
             const parseQuery = new ParseQuery(
-                {statement: this._nextStatement(), columns: EMPTY_ARRAY, parameters: EMPTY_ARRAY}, 
-                text, Future.withResolvers(), this.config.queryTimeout 
-                
+                text, newMeta, Future.withResolvers(), this.config.queryTimeout 
             )
 
             this._registerQuery(parseQuery)
@@ -385,8 +393,8 @@ export class Connection {
         parsing
             .tap(meta => {
                 const query = new StreamQuery(
-                    meta, text, args, controller, 
-                    null, this.config.queryTimeout
+                    text, args, meta, controller, 
+                    this.config.queryTimeout
                 )
 
                 const err = this._registerQuery(query)
@@ -420,7 +428,7 @@ export class Connection {
             .andThen(() =>  {
                 const tx = new Transaction(this)
 
-                return Future.of(txCallback(tx))
+                return Future.of(() => txCallback(tx))
                     .tap(() => {
                         if (tx.isActive) return tx.commit()
                     })
@@ -574,7 +582,6 @@ export class Connection {
 
                 query.complete()
             } break
-
 
 
             case ResponseTypes.DataRow: {

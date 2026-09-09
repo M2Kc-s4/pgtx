@@ -23,10 +23,9 @@ export class CollectQuery<T extends Row> extends Query {
     private _rows: T[] = []
 
     constructor(
-        public meta: StatementMeta,
         public text: QueryText,
         public args: unknown[],
-        public columns: ColumnDescription[] | null,
+        public meta: StatementMeta,
         public resolvers: Resolvers<Future<T[], PostgresError>>,
         timeout: number,
     )  {
@@ -54,9 +53,9 @@ export class CollectQuery<T extends Row> extends Query {
 
 export class ExecuteQuery extends Query {
     constructor(
-        public meta: StatementMeta,
         public text: QueryText,
         public args: unknown[],
+        public meta: StatementMeta,
         public resolvers: Resolvers<Future<void, PostgresError>>,
         timeout: number,
     ) {
@@ -78,11 +77,10 @@ export class ExecuteQuery extends Query {
 
 export class StreamQuery<T> extends Query {
     constructor(
-        public meta: StatementMeta,
         public text: QueryText,
         public args: unknown[],
+        public meta: StatementMeta,
         public controller: ReadableStreamDefaultController<T>,
-        public columns: ColumnDescription[] | null,
         timeout: number
     ) {
         super(timeout)
@@ -112,8 +110,8 @@ export class StreamQuery<T> extends Query {
 
 export class ParseQuery extends Query {
     constructor(
-        public meta: StatementMeta,
         public text: QueryText,
+        public meta: StatementMeta,
         public resolvers: Resolvers<Future<StatementMeta, PostgresError>>,
         timeout: number
     )  {

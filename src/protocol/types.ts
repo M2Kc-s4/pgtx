@@ -11,9 +11,7 @@ type FieldReader = (
 ) => unknown
 
 export interface BindHandler {
-    /** Имя типа в PostgreSQL — используется в сообщениях об ошибках. */
     pgType: string
-    /** Ожидаемая JS-форма значения — используется в сообщениях об ошибках. */
     jsShape: string
     validate: BindValidator
     write: BindWriter
