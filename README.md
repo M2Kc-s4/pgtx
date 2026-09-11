@@ -91,7 +91,7 @@ const posts = pool.query<Post>`SELECT * FROM posts`
 const [usersResult, postsResult] = await Promise.all([users, posts])
 ```
 
-Both queries go out in a single `socket.write()` and come back demuxed, in order. Whether it's 2 queries or 20, the round trip count doesn't change: one RTT to send the whole batch, one RTT to get every result back.
+Both queries go out in a single `socket.write()` and come back demuxed, in order. Whether it's 2 queries or 20, the round trip count doesn't change.
 
 `fluent-future`'s `Bind` gives the same parallelism a shape suited to independent, differently-typed queries:
 
@@ -102,7 +102,7 @@ const { user, config } = await Bind({
 })
 ```
 
-`user` and `config` fire together, pipeline together, and resolve together — still 2 RTT total, just with the results already assembled into an object instead of an array you have to destructure by position.
+`user` and `config` fire together, pipeline together, and resolve together — still 1 RTT total, just with the results already assembled into an object instead of an array you have to destructure by position.
 
 Errors don't leak across a batch, either. If one query in a pipelined group fails — a bad column, a constraint violation — only its own `Future` rejects; the others in the same batch still resolve normally with their own rows. Nothing gets rolled back or aborted on their account, because nothing tied them together in the first place beyond sharing a socket.
 
