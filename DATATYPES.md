@@ -14,7 +14,7 @@
 | `date`                                 | `Date`                                                             | `Date`                                                   |                                        |
 | `time`                                 | `string`                                                           | `string`                                                 | `HH:MM:SS.mmm`                         |
 | `timetz`                               | `string`                                                           | `string`                                                 | `HH:MM:SS.mmm±HH:MM`                   |
-| `interval`                             | `{ months: number, days: number, microseconds: number \| bigint }` | `{ months: number, days: number, microseconds: bigint }` |                                        |
+| `interval`                             | `{ months: number, days: number, microseconds: number }` | `{ months: number, days: number, microseconds: number }` |                                        |
 | `json` / `jsonb`                       | `unknown`                                                          | `unknown`                                                |                                        |
 | `uuid`                                 | `string`                                                           | `string`                                                 | `xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx` |
 | `inet` / `cidr`                        | `string`                                                           | `string`                                                 | IPv4 / IPv6 address or CIDR            |

@@ -381,8 +381,8 @@ export class ConnectionResponseBuffer {
     }
 
 
-    readBinaryInterval(): { months: number; days: number; microseconds: bigint } {
-        const microseconds = this.readBigInt64()
+    readBinaryInterval(): { months: number; days: number; microseconds: number } {
+    const microseconds = this.readInt64()
         const days = this.readInt32()
         const months = this.readInt32()
         return { months, days, microseconds }

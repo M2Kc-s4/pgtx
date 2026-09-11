@@ -12,6 +12,16 @@ import {
 } from './clauses'
 import { Connection } from "./connection";
 import { Transaction } from "./transaction";
+
+
+export type PgPoint = { x: number, y: number }
+export type PgLine = { a: number, b: number, c: number }
+export type PgLineSegment = { a: PgPoint, b: PgPoint }
+export type PgBox = { high: PgPoint, low: PgPoint }
+export type PgPath = { closed: boolean, points: PgPoint[] }
+export type PgPolygon = { points: PgPoint[] }
+export type PgInterval = { months: number, days: number, microseconds: number }
+
 /**
  * Core SQL tagging utility for Pgtx.
  * Provides type-safe helpers for building dynamic queries with recursive support.

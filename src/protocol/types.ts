@@ -222,14 +222,14 @@ export const handlers: Partial<Record<DataTypeOid, BindHandler>> = {
 
     [DataTypeOids.Interval]: {
         pgType: 'interval',
-        jsShape: '{ months: number, days: number, microseconds: number | bigint }',
-        validate: (v): v is { months: number; days: number; microseconds: number | bigint } =>
+        jsShape: '{ months: number, days: number, microseconds: number }',
+        validate: (v): v is { months: number; days: number; microseconds: number } =>
             v !== null &&
             typeof v === 'object' &&
             'months' in v && typeof (v as any).months === 'number' &&
             'days' in v && typeof (v as any).days === 'number' &&
             'microseconds' in v &&
-            (typeof (v as any).microseconds === 'number' || typeof (v as any).microseconds === 'bigint'),
+            typeof (v as any).microseconds === 'number',
         write: (req, v) => req.writeBinaryInterval(v),
         read: (res) => res.readBinaryInterval(),
     },

@@ -92,7 +92,7 @@ describe("Complete PostgreSQL Binary Datatypes Parsing Test", async () => {
             timetz_col: "15:30:45.123+03:00",
             point: {x: 1, y: 1},
             inta: [1, 2, 3, 5],
-            interval_col: { months: 14, days: 3, microseconds: 45_296_000_000n },
+            interval_col: { months: 14, days: 3, microseconds: 45_296_000_000 },
             macaddr_col: "08:00:2b:01:02:03",
             oid_col: 16384,
             cidr_col: "192.168.100.0",

@@ -6,7 +6,9 @@
 A PostgreSQL driver for Node.js with an API that doesn't require a manual to use. Built for regular applications, not for people who need four different flavors of the same stream implementation or a config object with forty optional fields you'll never touch.
 
 ```bash
-npm install @m2k-5f/pgtx
+npm install @m2k-5f/pgtx # npm
+
+bun add @m2k-5f/pgtx # bun
 ```
 
 ## Thirty seconds
@@ -44,9 +46,9 @@ Benchmarks run on GitHub Actions (Ubuntu, 2 vCPUs), reproducible, sources in thi
  
 | Connections | Pgtx | Postgres.js | Bun.sql |
 |---:|---:|---:|---:|
-| 50 | **21,093 req/s** | 8,967 req/s | 10,170 req/s |
-| 200 | **22,731 req/s** | 9,861 req/s | 11,725 req/s |
-| 500 | **22,673 req/s** | 8,289 req/s | 11,005 req/s |
+| 50 | **29,252 req/s** | 14,267 req/s | 17,634 req/s |
+| 200 | **31,565 req/s** | 12,316 req/s | 19,441 req/s |
+| 500 | **32,091 req/s** | 8,806 req/s | 19,267 req/s |
  
 Bun.sql is Bun's own built-in driver, written in native code and generally treated as the speed baseline in that ecosystem. Pgtx stays ahead of it at every concurrency level tested — the gap doesn't come from JS-vs-native, it comes from the protocol implementation.
  
@@ -56,149 +58,197 @@ Bun.sql is Bun's own built-in driver, written in native code and generally treat
 ## The parts worth knowing about
 
 
-### Error handling
+### Typed, fluent composition
 
-Every query returns a `Future<T[], PostgresError>` instead of a bare `Promise`. `await` works as usual, while `Future` also provides typed error handling and recovery without a `try/catch` pyramid.
-
-Queries in the same pipeline are isolated from each other. Each query gets its own `Sync`, so an error in one query does not affect other queries that were sent in the same batch.
+Every query returns a `Future<T, PostgresError>` — a `Promise` subclass from [`fluent-future`](https://www.npmjs.com/package/fluent-future) that keeps the error type attached instead of collapsing it to `unknown`. The same chain handles both paths: transform or act on success, transform or act on failure, without a `try/catch` in sight.
 
 ```typescript
-const [a, b] = await Promise.allSettled([
-  pool.execute`UPDATE accounts SET balance = balance + 100 WHERE id = ${1}`,
-  pool.execute`INSERT INTO accounts (id) VALUES (${1})` // duplicate key, fails
-])
-
-// a: fulfilled — the balance update is committed
-// b: rejected — the duplicate key error only affects this query
-```
-
-Errors can be matched and recovered directly on the `Future`:
-
-```typescript
-const users = await pool.query<User>`
-  SELECT * FROM users WHERE id = ${1}
+const user = await pool.query<User>`
+  SELECT * FROM users WHERE id = ${userId}
 `
-  .recoverIf(err => err.code === '42P01', []) // undefined_table → []
-  .recoverIf(err => err.code === '23505', []) // unique_violation → []
-  .tapErr(err => logger.error(err))
+  .map(rows => rows[0])                              // success → new value
+  .tap(user => logger.info('loaded user', user.id))  // success → side effect, value untouched
+  .andThen(user =>                                   // success → new Future
+    pool.query<Post>`SELECT * FROM posts WHERE user_id = ${user.id}`
+  )
+  .recoverIf(err => err.code === '42P01', [])         // one specific error → fallback
+  .mapErr(err => new AppError(err))                   // whatever error is left → transformed
+  .tapErr(err => logger.error(err))                   // error → side effect, error untouched
 ```
 
-This isolation is per statement, not atomicity across multiple statements. If several queries must succeed or fail together, use `begin()` and `savepoint()`.
+`map`, `tap`, and `andThen` never see the error; `mapErr`, `recoverIf`, and `tapErr` never see the success value — each method only touches the side it's named for, so a chain like the one above reads top to bottom without a `try/catch` breaking it up.
 
 
-### PostgreSQL Type Support
 
-The driver provides **100% support for PostgreSQL data types using the full binary protocol**. All supported types are encoded and decoded directly in PostgreSQL's binary wire format, without falling back to text-based parsing.
+### Pipelining, by default
 
-For a complete list of supported PostgreSQL types, their JavaScript input/output types, and string formats, see the [PostgreSQL Data Types](./DATATYPES.md) reference.
+Queries started in the same tick are folded into one pipelined write automatically — no batching API, no config flag:
+
+```typescript
+const users = pool.query<User>`SELECT * FROM users`
+const posts = pool.query<Post>`SELECT * FROM posts`
+
+const [usersResult, postsResult] = await Promise.all([users, posts])
+```
+
+Both queries go out in a single `socket.write()` and come back demuxed, in order. Whether it's 2 queries or 20, the round trip count doesn't change: one RTT to send the whole batch, one RTT to get every result back.
+
+`fluent-future`'s `Bind` gives the same parallelism a shape suited to independent, differently-typed queries:
+
+```typescript
+const { user, config } = await Bind({
+  user: pool.query<User>`SELECT * FROM users WHERE id = ${userId}`,
+  config: pool.query<Config>`SELECT * FROM config`
+})
+```
+
+`user` and `config` fire together, pipeline together, and resolve together — still 2 RTT total, just with the results already assembled into an object instead of an array you have to destructure by position.
+
+Errors don't leak across a batch, either. If one query in a pipelined group fails — a bad column, a constraint violation — only its own `Future` rejects; the others in the same batch still resolve normally with their own rows. Nothing gets rolled back or aborted on their account, because nothing tied them together in the first place beyond sharing a socket.
+
 
 
 ### Transactions and savepoints
 
+Transactions are explicit and composable:
+
 ```typescript
 await pool.begin(async tx => {
-  await tx.execute`INSERT INTO orders (user_id) VALUES (${userId})`
+  await tx.query`UPDATE accounts SET balance = balance - ${amount}`
+  await tx.query`UPDATE accounts SET balance = balance + ${amount}`
+})
+```
 
-  await tx.savepoint('reserve_stock', async stx => {
-    await stx.execute`UPDATE stock SET count = count - 1 WHERE product_id = ${productId}`
-    if (outOfStock) throw new Error('out of stock') // only the savepoint rolls back
-  }).tapErr(console.log)
+Use savepoints when only part of a transaction should be rolled back:
+
+```typescript
+await tx.savepoint(async sp => {
+  await sp.query`INSERT INTO audit_log ${event}`
 })
 ```
 
 
-### Pipelining is automatic, not opt-in
-
-`Bind`/`.bind` from [fluent-future](https://www.npmjs.com/package/fluent-future) group independent queries into the same pipeline batch for you:
-
+### Full PostgreSQL type support
+ 
+Pgtx uses PostgreSQL's binary protocol directly, so types aren't passed through as `any` and hoped for — geometric, temporal, and array types decode into real, named shapes:
+ 
 ```typescript
-// 5 queries, 2 round-trips
-const { user, posts, ...data } = await Bind({
-  user: pool.query<User>`...`,
-  config: pool.query<Config>`...`,
-  announcements: pool.query<Announcement>`...`
-}).bind({
-  posts: ({ user }) => pool.query<Post>`...`,
-  notifications: ({ user }) => pool.query<Notif>`...`
-})
+import type {
+  PgPoint, PgLine, PgLineSegment, PgBox, PgPath, PgPolygon, PgInterval
+} from "@m2k-5f/pgtx"
+ 
+const [venue] = await pool.query<{
+  id: number
+  location: PgPoint
+  footprint: PgPolygon
+  frontage: PgLineSegment
+  openHours: PgInterval
+}>`
+  SELECT id, location, footprint, frontage, open_hours
+  FROM venues
+  WHERE id = ${venueId}
+`
+ 
+venue.location.x        // number
+venue.footprint.points  // PgPoint[]
+venue.frontage.a.y      // number
+venue.openHours.months  // number
 ```
+ 
+`int8` and `int8[]` follow the same principle at the config level: set `int8toBigint` on the pool and the values you get back — and the types you write against them — are `bigint` instead of `number`, with no manual casting at the call site:
+ 
+```typescript
+const pool = new Pool({ ...config, int8toBigint: true })
+ 
+const [{ total, ids }] = await pool.query<{
+  total: bigint
+  ids: (bigint | null)[]
+}>`
+  SELECT sum(amount) AS total, array_agg(id) AS ids FROM ledger
+`
+```
+ 
+For a complete list of supported PostgreSQL types, their JavaScript input/output types, and string formats, see the [PostgreSQL Data Types](./DATATYPES.md) reference.
 
-Anything you fire off in the same tick without awaiting in between ends up on the wire together.
 
-### Streaming that doesn't buffer
+### Streaming without buffering
 
-`pool.stream()` pipes rows straight from the socket into a `ReadableStream`, no intermediate array, no GC spike from holding a million-row export in memory.
+Stream large result sets directly instead of loading the entire result into an array:
 
 ```typescript
-for await (const log of pool.stream<Log>`SELECT * FROM application_logs WHERE level = ${'error'}`) {
-  console.log(log.timestamp, log.data)
+const stream = pool.stream<Row>`
+  SELECT *
+  FROM events
+`
+
+for await (const row of stream) {
+  process(row)
 }
 ```
 
+### LISTEN / NOTIFY
 
-It's a real Web Streams object, so it drops straight into an HTTP response body:
-
-```typescript
-fetch(req) {
-  const stream = pool.stream`SELECT id, email FROM giant_user_table`
-  return new Response(stream, { headers: { "Content-Type": "application/json" } })
-}
-```
-
-
-### LISTEN / NOTIFY without babysitting a connection
+Subscribe to PostgreSQL notifications without manually managing a dedicated connection:
 
 ```typescript
-await pool.notify('user_events', JSON.stringify({ id: 42, action: 'signup' }))
-
-const unlisten = await pool.listen('user_events', payload => {
-  console.log('got:', payload)
+const listener = await pool.listen('events', payload => {
+  console.log(payload)
 })
 
-// later
-await unlisten() // sends UNLISTEN, hands the connection back
+await pool.notify('events', { type: 'created' })
+
+await listener.close()
 ```
 
-`pool.listen` borrows a dedicated connection and manages its lifecycle for you. If you need to multiplex several callbacks onto one channel on a connection you're pinning yourself, drop down to `conn.listen`/`conn.unlisten` directly — just don't release that connection back to the pool while you're still using it for that.
+### Composable SQL
 
-### Building queries without string-gluing
+Build dynamic queries without string concatenation:
 
 ```typescript
-// bulk insert — columns inferred from the object
-await pool.execute`INSERT INTO users ${sql.insert(users)}`
+const query = sql.select`
+  SELECT *
+  FROM ${sql.ident(table)}
+  ${sql.where(filters)}
+`
 
-// dynamic SET clause
-await pool.execute`UPDATE users SET ${sql.update({ status: 'active', last_login: new Date() })} WHERE id = ${userId}`
+const rows = await pool.query(query)
 ```
 
-Rule of thumb: `execute` when you don't need rows back, `query` when you do — same rule as the raw driver, `sql.*` doesn't change it.
+Helpers cover common dynamic SQL cases:
 
 ```typescript
-// composable fragments
-const filter = sql.fragment`status = ${'active'} AND age > ${21}`
-await pool.query`SELECT * FROM users WHERE ${filter}`
-
-// clean WHERE from an object, undefined keys just drop out
-await pool.query`SELECT * FROM users WHERE ${sql.where({ role: 'admin', age: undefined, active: true })}`
-
-// conditional fragments
-await pool.query`SELECT * FROM posts ${search ? sql.fragment`WHERE title ILIKE ${search}` : sql.empty}`
+sql.insert(data)
+sql.update(data)
+sql.where(filters)
+sql.fragment(...)
+sql.array(values)
+sql.ident(name)
+sql.literal(value)
+sql.empty
 ```
 
-`undefined` means `DEFAULT` in an insert, means "skip this field" in an update, and throws if you try to hand it to `VALUES` or an array — it's meant to be a decision point, not a silent `NULL`.
+### Safe by default
 
-## Not doing this
+Values in tagged SQL are always parameterized:
 
 ```typescript
-// don't
-await pool.query(`SELECT * FROM users WHERE name = '${userInput}'`)
-
-// do
-await pool.query`SELECT * FROM users WHERE name = ${userInput}`
-await pool.query`SELECT * FROM ${sql.ident(tableName)}`
+const users = await pool.query`
+  SELECT *
+  FROM users
+  WHERE email = ${email}
+    AND status = ${status}
+`
 ```
 
-Everything that goes through a tagged template is bound as `$1, $2, ...`. There's no code path where a template value becomes raw SQL text — if you need a dynamic identifier or literal, `sql.ident`/`sql.literal` exist precisely so you're never tempted to interpolate by hand.
+This becomes parameterized SQL rather than interpolating values directly into the query.
+
+For dynamic identifiers, use `sql.ident()` explicitly:
+
+```typescript
+sql`SELECT * FROM ${sql.ident(tableName)}`
+```
+
+Pgtx is a PostgreSQL driver, not an ORM — SQL stays visible and under your control.
 
 ## API
 

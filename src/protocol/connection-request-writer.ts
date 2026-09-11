@@ -529,13 +529,9 @@ export class ConnectionRequestBuffer {
     }
 
 
-    writeBinaryInterval(value: { months: number; days: number; microseconds: number | bigint }) {
+    writeBinaryInterval(value: { months: number; days: number; microseconds: number }) {
         this.writeInt32(16)
-        this.writeBigInt64(
-            typeof value.microseconds === 'bigint'
-                ? value.microseconds
-                : BigInt(value.microseconds)
-        )
+        this.writeInt64(value.microseconds)
         this.writeInt32(value.days)
         this.writeInt32(value.months)
         return this
