@@ -112,7 +112,7 @@ venue.openHours.months  // number
 ```typescript
 const pool = new Pool({ ...config, int8toBigint: true })
  
-const [{ total, ids }] = await pool.query<{
+const [{ total }] = await pool.query<{
   total: bigint
 }>`
   SELECT sum(amount) AS total FROM ledger
