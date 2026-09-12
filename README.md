@@ -114,9 +114,8 @@ const pool = new Pool({ ...config, int8toBigint: true })
  
 const [{ total, ids }] = await pool.query<{
   total: bigint
-  ids: (bigint | null)[]
 }>`
-  SELECT sum(amount) AS total, array_agg(id) AS ids FROM ledger
+  SELECT sum(amount) AS total FROM ledger
 `
 ```
 
