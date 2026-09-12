@@ -285,7 +285,7 @@ interface ConnectionPartialConfig {
   logLevel?: 'error' | 'notice' | 'query' | "none"   // default 'error'
   int8toBigint?: boolean                     // default false
   queryTimeout?: number                      // default 30000 (ms)
-  syncShedule?: 'beforeMicrotask' | 'afterMicrotask' | 'Immediate'  // default 'Immediate'
+  syncSсhedule?: 'beforeMicrotask' | 'afterMicrotask' | 'Immediate'  // default 'Immediate'
   ssl?: 'disable' | 'prefer' | 'require' // defaut 'prefer' 
   caPath?: string // forces `ssl` to 'require' if provided
 }

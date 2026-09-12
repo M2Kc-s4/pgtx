@@ -10,11 +10,11 @@ const DB = {
   database: env.PGDATABASE!,
 }
 
-const pgtx = new Pool({ ...DB, max: 20, syncShedule: 'Immediate' })
+const pgtx = new Pool({ ...DB, max: 20 })
 
 const pg = postgres({ ...DB, max: 20 })
 
-const bunSql = new Bun.sql(DB)
+const bunSql = new Bun.sql({...DB, max: 20})
 
 
 const server = Bun.serve({

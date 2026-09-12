@@ -10,7 +10,6 @@ const pool = new Pool({
   password: process.env.PGPASSWORD || 'postgres',
   database: process.env.PGDATABASE || 'pgtx_test',
   max: Number(process.env.PGMAX) || 10,
-  syncShedule: 'Immediate'
 });
 
 interface User {

@@ -35,7 +35,7 @@ export type ConnectionPartialConfig = {
     logLevel?: LogLevel,
     int8toBigint?: boolean,
     queryTimeout?: number
-    syncShedule?: "beforeMicrotask" | "afterMicrotask" | "Immediate",
+    syncSсhedule?: "beforeMicrotask" | "afterMicrotask" | "Immediate",
     ssl?: SSLMode
     caPath?: string
 }
@@ -50,7 +50,7 @@ export type ConnectionConfig = {
     logLevel: LogLevel,
     int8toBigint: boolean,
     queryTimeout: number
-    syncShedule: "beforeMicrotask" | "afterMicrotask" | "Immediate"
+    syncSсhedule: "beforeMicrotask" | "afterMicrotask" | "Immediate"
     ssl: SSLMode
     caPath?: string
 }

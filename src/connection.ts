@@ -92,15 +92,15 @@ export class Connection {
     }
 
 
-    private _registerShedule() {
+    private _registerSсhedule() {
         if (!this._sheduled) {
             this._sheduled = true
             this._writer.clear()
-            shedule[this.config.syncShedule](() => this._shedule())
+            shedule[this.config.syncSсhedule](() => this._sсhedule())
         }
     }
 
-    private _shedule() {
+    private _sсhedule() {
         if (this._reconnecting) return
 
         this._writer.hasMore && this._socket.write(this._writer)
@@ -110,7 +110,7 @@ export class Connection {
 
     
     private _registerQuery(query: PostgresQuery): PostgresError | null {
-        this._registerShedule()
+        this._registerSсhedule()
 
         if (query instanceof ParseQuery) {
             this._writer
@@ -160,7 +160,7 @@ export class Connection {
             logLevel: config.logLevel || 'error',
             int8toBigint: config.int8toBigint || false,
             queryTimeout: config.queryTimeout || 30000,
-            syncShedule: config.syncShedule || 'Immediate',
+            syncSсhedule: config.syncSсhedule || 'Immediate',
             ssl: config.caPath ? 'require' : (config.ssl || 'prefer')
         }
 
