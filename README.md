@@ -133,7 +133,7 @@ const posts = pool.query<Post>`SELECT * FROM posts`
 const [usersResult, postsResult] = await Promise.all([users, posts])
 ```
 
-Both queries go out in a single `socket.write()` and come back demuxed, in order. Whether it's 2 queries or 20, the round trip count doesn't change: one RTT to send the whole batch, one RTT to get every result back.
+Both queries go out in a single `socket.write()` and come back demuxed, in order. Whether it's 2 queries or 20, the round trip count doesn't change.
 
 `fluent-future`'s `Bind` gives the same parallelism a shape suited to independent, differently-typed queries:
 
