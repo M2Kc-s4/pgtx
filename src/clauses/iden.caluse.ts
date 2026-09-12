@@ -7,8 +7,6 @@ export class IdentifierClause<T extends string> extends Clause {
     ) {super()}
 
     static create<T extends string>(identificator: T) {
-        if (identificator === undefined) throw new TypeError("Identificator undefined")
-
         return new IdentifierClause<T>(identificator)
     }
 

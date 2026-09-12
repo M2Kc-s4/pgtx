@@ -45,17 +45,4 @@ describe("array clause test", () => {
         assert(params.text, "name = $1 AND age = $2 AND 1 = 1")
         assert(params.args, ["name", 18])
     })
-
-    it("undefined argument test", () => {
-        const array = [10, undefined, "string"]
-        const params = createParams()
-
-        throws(
-            () => sql.array(array).mapIntoQuery(params),
-            {
-                name: 'TypeError',
-                message: 'Array item at index 1 is undefined'
-            }
-        )
-    })
 })

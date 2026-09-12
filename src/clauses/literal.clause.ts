@@ -9,10 +9,6 @@ export class LiteralClause<T extends string> extends Clause {
     }
 
     static create<T extends string>(value: T): LiteralClause<T> {
-        if (value === undefined) {
-            throw new TypeError(`Literal undefined`)
-        }
-
         return new LiteralClause(value)
     }
 

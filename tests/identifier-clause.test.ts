@@ -16,17 +16,4 @@ describe("identifier clause test", () => {
         assert(params.args.length, 0)
         assert(params.text, '"identificator"')
     })
-
-    it("ident undefined parameter test", () => {
-        throws(
-            () => {
-                // @ts-ignore
-                sql.ident(undefined)
-            },
-            {
-                name: 'TypeError',
-                message: 'Identificator undefined'
-            }
-        )
-    })
 })

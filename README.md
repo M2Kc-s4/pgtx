@@ -78,55 +78,7 @@ const user = await pool.query<User>`
 
 `map`, `tap`, and `andThen` never see the error; `mapErr`, `recoverIf`, and `tapErr` never see the success value — each method only touches the side it's named for, so a chain like the one above reads top to bottom without a `try/catch` breaking it up.
 
-
-
-### Pipelining, by default
-
-Queries started in the same tick are folded into one pipelined write automatically — no batching API, no config flag:
-
-```typescript
-const users = pool.query<User>`SELECT * FROM users`
-const posts = pool.query<Post>`SELECT * FROM posts`
-
-const [usersResult, postsResult] = await Promise.all([users, posts])
-```
-
-Both queries go out in a single `socket.write()` and come back demuxed, in order. Whether it's 2 queries or 20, the round trip count doesn't change: one RTT to send the whole batch, one RTT to get every result back.
-
-`fluent-future`'s `Bind` gives the same parallelism a shape suited to independent, differently-typed queries:
-
-```typescript
-const { user, config } = await Bind({
-  user: pool.query<User>`SELECT * FROM users WHERE id = ${userId}`,
-  config: pool.query<Config>`SELECT * FROM config`
-})
-```
-
-`user` and `config` fire together, pipeline together, and resolve together — still 2 RTT total, just with the results already assembled into an object instead of an array you have to destructure by position.
-
-Errors don't leak across a batch, either. If one query in a pipelined group fails — a bad column, a constraint violation — only its own `Future` rejects; the others in the same batch still resolve normally with their own rows. Nothing gets rolled back or aborted on their account, because nothing tied them together in the first place beyond sharing a socket.
-
-
-
-### Transactions and savepoints
-
-Transactions are explicit and composable:
-
-```typescript
-await pool.begin(async tx => {
-  await tx.query`UPDATE accounts SET balance = balance - ${amount}`
-  await tx.query`UPDATE accounts SET balance = balance + ${amount}`
-})
-```
-
-Use savepoints when only part of a transaction should be rolled back:
-
-```typescript
-await tx.savepoint(async sp => {
-  await sp.query`INSERT INTO audit_log ${event}`
-})
-```
-
+---
 
 ### Full PostgreSQL type support
  
@@ -167,88 +119,142 @@ const [{ total, ids }] = await pool.query<{
   SELECT sum(amount) AS total, array_agg(id) AS ids FROM ledger
 `
 ```
+
+---
+
+### Pipelining, by default
+
+Queries started in the same tick are folded into one pipelined write automatically — no batching API, no config flag:
+
+```typescript
+const users = pool.query<User>`SELECT * FROM users`
+const posts = pool.query<Post>`SELECT * FROM posts`
+
+const [usersResult, postsResult] = await Promise.all([users, posts])
+```
+
+Both queries go out in a single `socket.write()` and come back demuxed, in order. Whether it's 2 queries or 20, the round trip count doesn't change: one RTT to send the whole batch, one RTT to get every result back.
+
+`fluent-future`'s `Bind` gives the same parallelism a shape suited to independent, differently-typed queries:
+
+```typescript
+// 5 queries, 2 round-trips
+const { user, posts, ...data } = await Bind({
+  user: pool.query<User>`...`,
+  config: pool.query<Config>`...`,
+  announcements: pool.query<Announcement>`...`
+}).bind({
+  posts: ({ user }) => pool.query<Post>`...`,
+  notifications: ({ user }) => pool.query<Notif>`...`
+})
+```
+
+`user` and `config` fire together, pipeline together, and resolve together — still 2 RTT total, just with the results already assembled into an object instead of an array you have to destructure by position.
+
+Errors don't leak across a batch, either. If one query in a pipelined group fails — a bad column, a constraint violation — only its own `Future` rejects; the others in the same batch still resolve normally with their own rows. Nothing gets rolled back or aborted on their account, because nothing tied them together in the first place beyond sharing a socket.
+
+
+## Exstra bits
+
+### Transactions and savepoints
+
+Transactions are explicit and composable:
+
+```typescript
+await pool.begin(async tx => {
+  await tx.query`UPDATE accounts SET balance = balance - ${amount}`
+  await tx.query`UPDATE accounts SET balance = balance + ${amount}`
+})
+```
+
+Use savepoints when only part of a transaction should be rolled back:
+
+```typescript
+await tx.savepoint(async sp => {
+  await sp.query`INSERT INTO audit_log ${event}`
+})
+```
  
 For a complete list of supported PostgreSQL types, their JavaScript input/output types, and string formats, see the [PostgreSQL Data Types](./DATATYPES.md) reference.
 
+---
 
-### Streaming without buffering
+### Streaming that doesn't buffer
 
-Stream large result sets directly instead of loading the entire result into an array:
+`pool.stream()` pipes rows straight from the socket into a `ReadableStream`, no intermediate array, no GC spike from holding a million-row export in memory.
 
 ```typescript
-const stream = pool.stream<Row>`
-  SELECT *
-  FROM events
-`
-
-for await (const row of stream) {
-  process(row)
+for await (const log of pool.stream<Log>`SELECT * FROM application_logs WHERE level = ${'error'}`) {
+  console.log(log.timestamp, log.data)
 }
 ```
 
-### LISTEN / NOTIFY
-
-Subscribe to PostgreSQL notifications without manually managing a dedicated connection:
+It's a real Web Streams object, so it drops straight into an HTTP response body:
 
 ```typescript
-const listener = await pool.listen('events', payload => {
-  console.log(payload)
+fetch(req) {
+  const stream = pool.stream`SELECT id, email FROM giant_user_table`
+  return new Response(stream, { headers: { "Content-Type": "application/json" } })
+}
+```
+
+---
+
+### LISTEN / NOTIFY without babysitting a connection
+
+```typescript
+await pool.notify('user_events', JSON.stringify({ id: 42, action: 'signup' }))
+
+const unlisten = await pool.listen('user_events', payload => {
+  console.log('got:', payload)
 })
 
-await pool.notify('events', { type: 'created' })
-
-await listener.close()
+// later
+await unlisten() // sends UNLISTEN, hands the connection back
 ```
 
-### Composable SQL
+`pool.listen` borrows a dedicated connection and manages its lifecycle for you. If you need to multiplex several callbacks onto one channel on a connection you're pinning yourself, drop down to `conn.listen`/`conn.unlisten` directly — just don't release that connection back to the pool while you're still using it for that.
 
-Build dynamic queries without string concatenation:
+---
+
+### Building queries without string-gluing
 
 ```typescript
-const query = sql.select`
-  SELECT *
-  FROM ${sql.ident(table)}
-  ${sql.where(filters)}
-`
+// bulk insert — columns inferred from the object
+await pool.execute`INSERT INTO users ${sql.insert(users)}`
 
-const rows = await pool.query(query)
+// dynamic SET clause
+await pool.execute`UPDATE users SET ${sql.update({ status: 'active', last_login: new Date() })} WHERE id = ${userId}`
 ```
 
-Helpers cover common dynamic SQL cases:
+Rule of thumb: `execute` when you don't need rows back, `query` when you do — same rule as the raw driver, `sql.*` doesn't change it.
 
 ```typescript
-sql.insert(data)
-sql.update(data)
-sql.where(filters)
-sql.fragment(...)
-sql.array(values)
-sql.ident(name)
-sql.literal(value)
-sql.empty
+// composable fragments
+const filter = sql.fragment`status = ${'active'} AND age > ${21}`
+await pool.query`SELECT * FROM users WHERE ${filter}`
+
+// clean WHERE from an object, undefined keys just drop out
+await pool.query`SELECT * FROM users WHERE ${sql.where({ role: 'admin', age: undefined, active: true })}`
+
+// conditional fragments
+await pool.query`SELECT * FROM posts ${search ? sql.fragment`WHERE title ILIKE ${search}` : sql.empty}`
 ```
 
-### Safe by default
+`undefined` means `DEFAULT` in an insert, means "skip this field" in an update, and throws if you try to hand it to `VALUES` or an array — it's meant to be a decision point, not a silent `NULL`.
 
-Values in tagged SQL are always parameterized:
+#### Not doing this
 
 ```typescript
-const users = await pool.query`
-  SELECT *
-  FROM users
-  WHERE email = ${email}
-    AND status = ${status}
-`
+// don't
+await pool.query(`SELECT * FROM users WHERE name = '${userInput}'`)
+
+// do
+await pool.query`SELECT * FROM users WHERE name = ${userInput}`
+await pool.query`SELECT * FROM ${sql.ident(tableName)}`
 ```
 
-This becomes parameterized SQL rather than interpolating values directly into the query.
-
-For dynamic identifiers, use `sql.ident()` explicitly:
-
-```typescript
-sql`SELECT * FROM ${sql.ident(tableName)}`
-```
-
-Pgtx is a PostgreSQL driver, not an ORM — SQL stays visible and under your control.
+Everything that goes through a tagged template is bound as `$1, $2, ...`. There's no code path where a template value becomes raw SQL text — if you need a dynamic identifier or literal, `sql.ident`/`sql.literal` exist precisely so you're never tempted to interpolate by hand.
 
 ## API
 

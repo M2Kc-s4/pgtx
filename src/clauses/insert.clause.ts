@@ -7,23 +7,22 @@ export class InsertClause<T extends Record<string, any>> extends Clause {
     ) {super()}
 
     static create<T extends Record<string, any>>(...objects: NoInfer<T>[]) {
-        if (objects.length === 0) {
-            throw new Error('Insert clause has no rows to insert.\n Provide at least one object with data.')
-        }
         return new InsertClause<T>(objects)
     }
 
     override mapIntoQuery(params: ClauseStrategyParams) {
+        if (this.inserts.length === 0) {
+            params.args.push(undefined)
+            params.text += `(undefined) values ($${params.args.length})`
+            return
+        }
+
         const columns = Object.keys(this.inserts[0])
         const columnsCount = columns.length
 
         params.text += `(${columns.join(', ')}) VALUES `
 
         this.inserts.forEach((object, index) => {
-            if (Object.keys(object).length !== columnsCount) {
-                throw new Error(`all rows must have the same columns`)
-            }
-
             if (index) params.text += ', '
             
 

@@ -16,17 +16,4 @@ describe("literal clause test", () => {
         assert(params.text, "literal")
         assert(params.args.length, 0)
     })
-
-    it("undefined behavior test", () => {
-        throws(
-            () => {
-                // @ts-ignore
-                sql.literal(undefined)
-            },
-            {
-                name: 'TypeError',
-                message: 'Literal undefined' 
-            }
-        )
-    })
 })

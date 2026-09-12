@@ -12,8 +12,6 @@ export class WhereClause<T extends Record<string, any>> extends Clause {
 
     override mapIntoQuery(params: ClauseStrategyParams) {
         const entries = Object.entries(this._value).filter(([_, value]) => value !== undefined)
-
-        if (entries.length === 0) throw new Error('Where clause has no data to update. All values are `undefined`')
             
         entries.forEach(([key, value], index) => {
             if (index) params.text += ' AND '
