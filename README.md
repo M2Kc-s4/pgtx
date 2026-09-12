@@ -80,6 +80,55 @@ const user = await pool.query<User>`
 
 ---
 
+### Pipelining, by default
+
+Queries started in the same tick are folded into one pipelined write automatically — no batching API, no config flag:
+
+```typescript
+const users = pool.query<User>`SELECT * FROM users`
+const posts = pool.query<Post>`SELECT * FROM posts`
+
+const [usersResult, postsResult] = await Promise.all([users, posts])
+```
+
+Both queries go out in a single `socket.write()` and come back demuxed, in order. Whether it's 2 queries or 20, the round trip count doesn't change.
+
+`fluent-future`'s `Bind` gives the same parallelism a shape suited to independent, differently-typed queries:
+
+```typescript
+const { user, config } = await Bind({
+  user: pool.query<User>`SELECT * FROM users WHERE id = ${userId}`,
+  config: pool.query<Config>`SELECT * FROM config`
+})
+```
+
+`user` and `config` fire together, pipeline together, and resolve together — still 1 RTT total, just with the results already assembled into an object instead of an array you have to destructure by position.
+
+Errors don't leak across a batch, either. If one query in a pipelined group fails — a bad column, a constraint violation — only its own `Future` rejects; the others in the same batch still resolve normally with their own rows. Nothing gets rolled back or aborted on their account, because nothing tied them together in the first place beyond sharing a socket.
+
+
+
+### Transactions and savepoints
+
+Transactions are explicit and composable:
+
+```typescript
+await pool.begin(async tx => {
+  await tx.query`UPDATE accounts SET balance = balance - ${amount}`
+  await tx.query`UPDATE accounts SET balance = balance + ${amount}`
+})
+```
+
+Use savepoints when only part of a transaction should be rolled back:
+
+```typescript
+await tx.savepoint(async sp => {
+  await sp.query`INSERT INTO audit_log ${event}`
+})
+```
+
+>>>>>>> 37f9cc9c929fdba15cb54c8a283770f5978ad3d9
+
 ### Full PostgreSQL type support
  
 Pgtx uses PostgreSQL's binary protocol directly, so types aren't passed through as `any` and hoped for — geometric, temporal, and array types decode into real, named shapes:
