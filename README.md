@@ -127,7 +127,7 @@ await tx.savepoint(async sp => {
 })
 ```
 
->>>>>>> 37f9cc9c929fdba15cb54c8a283770f5978ad3d9
+---
 
 ### Full PostgreSQL type support
  
