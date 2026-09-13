@@ -73,7 +73,10 @@ export const ErrSSLDenied = new PostgresError("SSL is required but server denied
 export const ErrDatabaseNotFound = new PostgresError('Database with that dsn not found')
 export const ErrUntrustedCertificate = new PostgresError("Database SSL certificate is untrusted or self-signed")
 export const ErrCertificateFileNotFound = new PostgresError("The SSL certificate file specified in caPath was not found")
-
+export const ErrTransactionInProgress = new PostgresError(
+    "This connection has an active transaction — use the Transaction object passed into begin()'s callback instead of the Connection directly",
+    'transaction_in_progress', '', "ERROR"
+)
 
 function describeValue(value: unknown): string {
     if (value === null) return 'null'

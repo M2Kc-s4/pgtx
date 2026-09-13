@@ -27,7 +27,7 @@ const [user] = await pool.query<User>`SELECT * FROM users WHERE id = ${1}`
 
 // returns rows → query, doesn't → execute
 await pool.execute`
-  INSERT INTO users ${sql.insert<User>([{ name: 'Alice', age: 25 }, { name: 'Bob', age: 30 }])}
+  INSERT INTO users ${sql.insert<User>({ name: 'Alice', age: 25 }, { name: 'Bob', age: 30 })}
 `
 
 await pool.begin(async tx => {
@@ -220,7 +220,7 @@ await unlisten() // sends UNLISTEN, hands the connection back
 
 ```typescript
 // bulk insert — columns inferred from the object
-await pool.execute`INSERT INTO users ${sql.insert(users)}`
+await pool.execute`INSERT INTO users ${sql.insert(...users)}`
 
 // dynamic SET clause
 await pool.execute`UPDATE users SET ${sql.update({ status: 'active', last_login: new Date() })} WHERE id = ${userId}`
@@ -310,6 +310,8 @@ class Pool {
 
   get size(): number
   get total(): number
+  get isOpened(): boolean
+  get isClosed(): boolean
 }
 
 interface PoolPartialConfig extends ConnectionPartialConfig {
@@ -322,6 +324,9 @@ interface PoolPartialConfig extends ConnectionPartialConfig {
 ```typescript
 class Transaction {
   query<T>(strings: TemplateStringsArray, ...values: any[]): Future<T[], PostgresError>
+  execute(templates: TemplateStringsArray, ...params: any[]): Future<void, PostgresError>
+  stream<T extends Row>(templates: TemplateStringsArray, ...params: any[]): ReadableStream<T>
+
   commit(): Future<void, PostgresError>
   rollback(): Future<void, PostgresError>
   savepoint<T>(name: string, callback: (tx: Transaction) => Promise<T>): Future<T, unknown>

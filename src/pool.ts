@@ -253,6 +253,16 @@ export class Pool {
         return this._total
     }
 
+
+    get isOpened() {
+        return this._isOpened
+    }
+
+
+    get isClosed() {
+        return !this._isOpened
+    }
+
     
     /**
      * Closes idle connections and rejects pending `acquire()` calls. Not usable afterward.

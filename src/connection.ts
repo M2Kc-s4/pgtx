@@ -8,7 +8,7 @@ import { Queue } from "./queue"
 import { CollectQuery, StreamQuery, ExecuteQuery, Query, ParseQuery, PostgresQuery } from "./query"
 import { EmptyClause, sql } from "."
 import { Begin, Future, Ok } from 'fluent-future'
-import { ErrConnectionClosed, ErrConnectionReconnecting, PostgresError } from "./error"
+import { ErrConnectionClosed, ErrConnectionReconnecting, ErrTransactionInProgress, PostgresError } from "./error"
 import { ReadableStreamDefaultController } from "stream/web"
 import { nextTick } from "process"
 import { authorizeSocket, createSocket, upgradeSocket } from "./protocol/socket-authorization"
@@ -44,6 +44,7 @@ export class Connection {
     private _closing: Resolvers<Future<void, PostgresError>> | null = null
     private _closed = false
     private _reconnecting: Future<void, PostgresError> | null = null
+    private _inTransaction = false
 
     private _socket: SocketConnector
 
@@ -180,14 +181,26 @@ export class Connection {
      * const users = await conn.query<User>`SELECT * FROM users WHERE id = ${1}`
      */
     query<T extends Row>(templates: TemplateStringsArray, ...params: any[]) {
-        if (this.isClosed) return Future.reject(ErrConnectionClosed)
+        if (this.isClosed) {
+            this._logError(ErrConnectionClosed)
+            return Future.reject(ErrConnectionClosed)
+        }
+
+        if (this._inTransaction) {
+            this._logError(ErrTransactionInProgress)
+            return Future.reject(ErrTransactionInProgress)
+        }
 
         const {text, args} = compileSqlTemplate(templates, params)
 
         const resolvers = Future.withResolvers<T[], PostgresError>()
 
-        if (this._reconnecting) return this._reconnecting.andThen(() => this._performQuery<T>(text, args, resolvers))
-
+        if (this._reconnecting) {
+            return this._reconnecting
+                .tapErr(err => this._logError(err))
+                .andThen(() => this._performQuery<T>(text, args, resolvers))
+        }
+        
         return this._performQuery<T>(text, args, resolvers)
     }
 
@@ -255,13 +268,25 @@ export class Connection {
      * await conn.execute`UPDATE users SET name = ${name} WHERE id = ${id}`
      */
     execute(templates: TemplateStringsArray, ...params: any[]) {
-        if (this.isClosed) return Future.reject(ErrConnectionClosed)
+        if (this.isClosed) {
+            this._logError(ErrConnectionClosed)
+            return Future.reject(ErrConnectionClosed)
+        }
+
+        if (this._inTransaction) {
+            this._logError(ErrTransactionInProgress)
+            return Future.reject(ErrTransactionInProgress)
+        }
 
         const {text, args} = compileSqlTemplate(templates, params)
 
         const resolvers = Future.withResolvers<void, PostgresError>()
             
-        if (this._reconnecting) return this._reconnecting.andThen(() => this._performExecute(text, args, resolvers))
+        if (this._reconnecting) {
+            return this._reconnecting
+                .tapErr(err => this._logError(err))
+                .andThen(() => this._performExecute(text, args, resolvers))
+        }
 
         return this._performExecute(text, args, resolvers)
     }
@@ -330,7 +355,15 @@ export class Connection {
      * for await (const row of conn.stream<User>`SELECT * FROM orders`) { ... }
      */
     stream<T extends Row>(templates: TemplateStringsArray, ...params: any[]) {
-        if (this.isClosed) throw ErrConnectionClosed
+        if (this.isClosed) {
+            this._logError(ErrConnectionClosed)
+            throw ErrConnectionClosed
+        }
+
+        if (this._inTransaction) {
+            this._logError(ErrTransactionInProgress)
+            throw (ErrTransactionInProgress)
+        }
 
         const {text, args} = compileSqlTemplate(templates, params)
         
@@ -345,7 +378,11 @@ export class Connection {
         if (this._reconnecting) {
             this._reconnecting
                 .tap(() => this._performStream<T>(text, args, controller))
-                .tapErr(err => controller.error(err))
+                .tapErr(err => {
+                    this._logError(err)
+                    controller.error(err)
+                })
+                .recover()
 
             return stream
         }
@@ -420,12 +457,10 @@ export class Connection {
      * })
      */
     begin<T>(txCallback: (transaction: Transaction) => Promise<T>) {
-        if (this.isClosed) return Future.reject(ErrConnectionClosed)
-
-
         return Begin()
             .andThen(() => this.execute`begin`)    
             .andThen(() =>  {
+                this._inTransaction = true
                 const tx = new Transaction(this)
 
                 return Future.of(() => txCallback(tx))
@@ -436,37 +471,31 @@ export class Connection {
                         if (tx.isActive) return tx.rollback()
                     })
             })
+            .finally(() => this._inTransaction = false)
     }
 
 
     /** Sends a `pg_notify` message on `channelName` (payload ≤ 8000 bytes). */
     notify(channelName: string, payload: string = "") {
-        if (this.isClosed) return Future.reject(ErrConnectionClosed)
-
-        return this.execute`select pg_notify(${channelName}, ${payload})`.map(() => {})
+        return this.execute`select pg_notify(${channelName}, ${payload})`
     }
 
 
     /** Subscribes `callback` to `channelName`, issuing `LISTEN` on first subscription. */
     listen(channelName: string, callback: (payload: string) => void) {
-        if (this.isClosed) return Future.reject(ErrConnectionClosed)
-
-        if (!this._listeningCallbacks.has(channelName as ChannelName)) {
-            this._listeningCallbacks.set(channelName as ChannelName, new Set())
-        }
-
-        const callbackSet = this._listeningCallbacks.get(channelName as ChannelName)!
-
-        callbackSet.add(callback)
-
         return this.execute`listen ${sql.ident(channelName)};`
+            .tap(() => {
+                if (!this._listeningCallbacks.has(channelName as ChannelName)) {
+                    this._listeningCallbacks.set(channelName as ChannelName, new Set())
+                }
+                
+                this._listeningCallbacks.get(channelName as ChannelName)!.add(callback)
+            }) 
     }
 
 
     /** Unsubscribes `callback`, issuing `UNLISTEN` once no callbacks remain. */
     unlisten(channelName: string, callback: (payload: string) => void): Future<void, PostgresError> {
-        if (this.isClosed) return Future.reject(ErrConnectionClosed)
-
         if (!this._listeningCallbacks.has(channelName as ChannelName)) {
             return Ok()
         }
@@ -477,7 +506,7 @@ export class Connection {
 
         if (callbackSet.size === 0) {
             this._listeningCallbacks.delete(channelName as ChannelName)
-            return this.execute`unlisten ${sql.ident(channelName)};`.map(() => {})
+            return this.execute`unlisten ${sql.ident(channelName)};`
         }
         
         return Ok()

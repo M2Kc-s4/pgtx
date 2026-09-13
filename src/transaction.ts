@@ -1,8 +1,9 @@
 import { Begin, Future } from "fluent-future"
 import { IdentifierClause } from "./clauses"
 import { Connection } from "./connection"
-import { ErrTransactionClosed, PostgresError } from "./error"
+import { ErrConnectionClosed, ErrTransactionClosed, ErrTransactionInProgress, PostgresError } from "./error"
 import { Row } from "./types"
+import { compileSqlTemplate } from "./utils"
 
 /**
  * Represents an active SQL transaction.
@@ -15,6 +16,7 @@ export class Transaction {
         readonly conn: Connection
     ) {}
 
+
     /**
      * Returns true if the transaction is still open (not committed or rolled back).
      */
@@ -22,36 +24,52 @@ export class Transaction {
         return !this.isFinished
     }
     
+
     /**
      * Commits the current transaction.
      */
     public commit() {
-        if (this.isFinished) return Future.reject(ErrTransactionClosed)
-
-        return this.conn.query`COMMIT`
+        return this.execute`COMMIT`
             .tap(() => this.isFinished = true)
-            .map(() => {})
     }
+
 
     /**
      * Rolls back the current transaction.
      */
     public rollback() {
-        if (this.isFinished) return Future.reject(ErrTransactionClosed)
-
-        return this.conn.query`ROLLBACK` 
+        return this.execute`ROLLBACK` 
             .tap(() => this.isFinished = true)
-            .map(() => {})
     }
     
+
     /**
      * Executes a query within the current transaction.
      */
-    public query<T extends Row>(strings: TemplateStringsArray, ...values: any[]) {
-        if (this.isFinished) return Future.reject(ErrTransactionClosed)
+    public query<T extends Row>(templates: TemplateStringsArray, ...params: any[]) {
+        if (this.isFinished) {
+            this.conn['_logError'](ErrTransactionClosed)
+            return Future.reject(ErrTransactionClosed)
+        }
 
-        return this.conn.query<T>(strings, ...values)
+        if (this.conn.isClosed) {
+            this.conn['_logError'](ErrConnectionClosed)
+            return Future.reject(ErrConnectionClosed)
+        }
+        
+        const {text, args} = compileSqlTemplate(templates, params)
+
+        const resolvers = Future.withResolvers<T[], PostgresError>()
+        
+        if (this.conn['_reconnecting']) {
+            return this.conn['_reconnecting']
+                .tapErr(err => this.conn['_logError'](err))
+                .andThen(() => this.conn['_performQuery'](text, args, resolvers))
+        }
+
+        return this.conn['_performQuery'](text, args, resolvers)
     }
+
 
     /**
      * Like {@link query}, but for statements that don't return rows (INSERT/UPDATE/DDL/etc).
@@ -59,11 +77,75 @@ export class Transaction {
      * @example
      * await tx.execute`UPDATE users SET name = ${name} WHERE id = ${id}`
      */
-    public execute(strings: TemplateStringsArray, ...params: any[]) {
-        if (this.isFinished) return Future.reject(ErrTransactionClosed)
+    public execute(templates: TemplateStringsArray, ...params: any[]) {
+        if (this.isFinished) {
+            this.conn['_logError'](ErrTransactionClosed)
+            return Future.reject(ErrTransactionClosed)
+        }
 
-        return this.conn.execute(strings, ...params)
+        if (this.conn.isClosed) {
+            this.conn['_logError'](ErrConnectionClosed)
+            return Future.reject(ErrConnectionClosed)
+        }
+
+        const {text, args} = compileSqlTemplate(templates, params)
+
+        const resolvers = Future.withResolvers<void, PostgresError>()
+        
+        if (this.conn['_reconnecting']) {
+            return this.conn['_reconnecting']
+                .tapErr(err => this.conn['_logError'](err))
+                .andThen(() => this.conn['_performExecute'](text, args, resolvers))
+        }
+
+        return this.conn['_performExecute'](text, args, resolvers)
     }
+
+
+    /**
+     * Streams query results as a `ReadableStream`, without buffering rows in memory.
+     * Ideal for large result sets or piping straight into an HTTP response.
+     *
+     * @example
+     * for await (const row of conn.stream<User>`SELECT * FROM orders`) { ... }
+     */
+    stream<T extends Row>(templates: TemplateStringsArray, ...params: any[]) {
+        if (this.isFinished) {
+            this.conn['_logError'](ErrTransactionClosed)
+            throw ErrTransactionClosed
+        }
+        if (this.conn.isClosed) {
+            this.conn['_logError'](ErrConnectionClosed)
+            throw ErrConnectionClosed
+        }
+
+        const {text, args} = compileSqlTemplate(templates, params)
+        
+        let controller!: ReadableStreamDefaultController<T>
+
+        const stream = new ReadableStream<T>({
+            start: c => {
+                controller = c
+            }
+        })
+
+        if (this.conn['_reconnecting']) {
+            this.conn['_reconnecting']
+                .tap(() => this.conn['_performStream']<T>(text, args, controller))
+                .tapErr(err => {
+                    this.conn['_logError'](err)
+                    controller.error(err)
+                })
+                .recover()
+
+            return stream
+        }
+
+        this.conn['_performStream']<T>(text, args, controller)
+
+        return stream
+    }
+
 
     /**
      * Creates a sub-transaction using PostgreSQL SAVEPOINT.
@@ -75,15 +157,13 @@ export class Transaction {
      *   if (error) throw new Error() // Only this insert rolls back
      * });
      */
-    public savepoint<T>(name: string, callback: (tx: Transaction) => Promise<T>) {
-        if (this.isFinished) return Future.reject(ErrTransactionClosed)
-
+    public savepoint<T>(name: string, callback: (tx: Transaction) => Promise<T>) {        
         return Begin<PostgresError>()
-            .andThen(() =>this.conn.query`SAVEPOINT ${IdentifierClause.create(name)}`)
-            .andThen(() => 
-                Future.of(callback(this), )
-                    .tap(() => this.conn.query`RELEASE SAVEPOINT ${IdentifierClause.create(name)}`)
-                    .tapErr(() => this.conn.query`ROLLBACK TO SAVEPOINT ${IdentifierClause.create(name)}`)
-            )   
+            .andThen(() => this.query`SAVEPOINT ${IdentifierClause.create(name)}`)
+            .andThen(() =>
+                Future.of(() => callback(this))
+                    .tap(() => this.query`RELEASE SAVEPOINT ${IdentifierClause.create(name)}`)
+                    .tapErr(() => this.query`ROLLBACK TO SAVEPOINT ${IdentifierClause.create(name)}`)
+            )
     }
 }

@@ -36,7 +36,7 @@ export const sql = {
      * // Result: (name, age) VALUES ($1, $2)
      * 
      * @example 
-     * sql.insert([{ id: 1 }, { id: 2 }]) 
+     * sql.insert({ id: 1 }, { id: 2 }) 
      * // Result: (id) VALUES ($1), ($2)
      */
     insert: InsertClause.create,
