@@ -153,7 +153,7 @@ const { user, posts, ...data } = await Bind({
 Errors don't leak across a batch, either. If one query in a pipelined group fails — a bad column, a constraint violation — only its own `Future` rejects; the others in the same batch still resolve normally with their own rows. Nothing gets rolled back or aborted on their account, because nothing tied them together in the first place beyond sharing a socket.
 
 
-## Exstra bits
+## Extra bits
 
 ### Transactions and savepoints
 

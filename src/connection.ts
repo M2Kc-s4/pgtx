@@ -14,7 +14,6 @@ import { nextTick } from "process"
 import { authorizeSocket, createSocket, upgradeSocket } from "./protocol/socket-authorization"
 import { ConnectionResponseBuffer } from "./protocol/connection-response-reader"
 import { ConnectionRequestBuffer } from "./protocol/connection-request-writer"
-import { error } from "console"
 
 
 const shedule = {
