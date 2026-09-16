@@ -119,6 +119,23 @@ const [{ total }] = await pool.query<{
 `
 ```
 
+Validation happens before anything hits the socket. If a bound value doesn't match the
+column's type, you get a `PostgresError` from the driver itself — not a round trip and a
+server-side `invalid input syntax`:
+
+```typescript
+await pool.query`INSERT INTO users (age) VALUES (${"twenty"})`
+// PostgresError: Bind error: Parameter $1 type mismatch.
+//   Expected PostgreSQL type "int4" (number (-2147483648..2147483647)), received: "twenty".
+//   code: '22000', dataType: 'int4'
+//   hint: Pass a value matching number (-2147483648..2147483647) for $1.
+```
+
+The check is exact, not coercive — `1` is not a `bool`, `99999` is not an `int2`, and a
+malformed UUID string is caught before it's encoded. Nothing is silently cast on your
+behalf, so a type error is always your code's bug and never a value quietly changing shape
+on the way to the database.
+
 ---
 
 ### Pipelining, by default
