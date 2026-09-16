@@ -3,7 +3,7 @@
 [![Tests](https://github.com/M2K-5F/pgtx/actions/workflows/tests.yaml/badge.svg)](https://github.com/M2K-5F/pgtx/actions/workflows/tests.yaml)
 [![npm version](https://img.shields.io/npm/v/@m2k-5f/pgtx.svg)](https://www.npmjs.com/package/@m2k-5f/pgtx)
 
-A PostgreSQL driver for Node.js with an API that doesn't require a manual to use. Built for regular applications, not for people who need four different flavors of the same stream implementation or a config object with forty optional fields you'll never touch.
+A PostgreSQL driver for Node.js \| Bun. Built for regular applications, not for people who need four different flavors of the same stream implementation or a config object with forty optional fields you'll never touch.
 
 ```bash
 npm install @m2k-5f/pgtx # npm
