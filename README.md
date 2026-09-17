@@ -343,6 +343,7 @@ class Transaction {
   query<T>(strings: TemplateStringsArray, ...values: any[]): Future<T[], PostgresError>
   execute(templates: TemplateStringsArray, ...params: any[]): Future<void, PostgresError>
   stream<T extends Row>(templates: TemplateStringsArray, ...params: any[]): ReadableStream<T>
+  notify(channelName: string, payload?: string): Future<void, PostgresError>
 
   commit(): Future<void, PostgresError>
   rollback(): Future<void, PostgresError>

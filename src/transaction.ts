@@ -46,28 +46,13 @@ export class Transaction {
     /**
      * Executes a query within the current transaction.
      */
-    public query<T extends Row>(templates: TemplateStringsArray, ...params: any[]) {
+    query<T extends Row>(templates: TemplateStringsArray, ...params: any[]) {
         if (this.isFinished) {
             this.conn['_logError'](ErrTransactionClosed)
             return Future.reject(ErrTransactionClosed)
         }
-
-        if (this.conn.isClosed) {
-            this.conn['_logError'](ErrConnectionClosed)
-            return Future.reject(ErrConnectionClosed)
-        }
         
-        const {text, args} = compileSqlTemplate(templates, params)
-
-        const resolvers = Future.withResolvers<T[], PostgresError>()
-        
-        if (this.conn['_reconnecting']) {
-            return this.conn['_reconnecting']
-                .tapErr(err => this.conn['_logError'](err))
-                .andThen(() => this.conn['_performQuery'](text, args, resolvers))
-        }
-
-        return this.conn['_performQuery'](text, args, resolvers)
+        return this.conn.query<T>(templates, ...params)
     }
 
 
@@ -77,28 +62,13 @@ export class Transaction {
      * @example
      * await tx.execute`UPDATE users SET name = ${name} WHERE id = ${id}`
      */
-    public execute(templates: TemplateStringsArray, ...params: any[]) {
+    execute(templates: TemplateStringsArray, ...params: any[]) {
         if (this.isFinished) {
             this.conn['_logError'](ErrTransactionClosed)
             return Future.reject(ErrTransactionClosed)
         }
-
-        if (this.conn.isClosed) {
-            this.conn['_logError'](ErrConnectionClosed)
-            return Future.reject(ErrConnectionClosed)
-        }
-
-        const {text, args} = compileSqlTemplate(templates, params)
-
-        const resolvers = Future.withResolvers<void, PostgresError>()
         
-        if (this.conn['_reconnecting']) {
-            return this.conn['_reconnecting']
-                .tapErr(err => this.conn['_logError'](err))
-                .andThen(() => this.conn['_performExecute'](text, args, resolvers))
-        }
-
-        return this.conn['_performExecute'](text, args, resolvers)
+        return this.conn.execute(templates, ...params)
     }
 
 
@@ -114,36 +84,14 @@ export class Transaction {
             this.conn['_logError'](ErrTransactionClosed)
             throw ErrTransactionClosed
         }
-        if (this.conn.isClosed) {
-            this.conn['_logError'](ErrConnectionClosed)
-            throw ErrConnectionClosed
-        }
 
-        const {text, args} = compileSqlTemplate(templates, params)
-        
-        let controller!: ReadableStreamDefaultController<T>
+        return this.conn.stream<T>(templates, ...params)
+    }
 
-        const stream = new ReadableStream<T>({
-            start: c => {
-                controller = c
-            }
-        })
 
-        if (this.conn['_reconnecting']) {
-            this.conn['_reconnecting']
-                .tap(() => this.conn['_performStream']<T>(text, args, controller))
-                .tapErr(err => {
-                    this.conn['_logError'](err)
-                    controller.error(err)
-                })
-                .recover()
-
-            return stream
-        }
-
-        this.conn['_performStream']<T>(text, args, controller)
-
-        return stream
+    /** Sends a `pg_notify` message on `channelName` (payload ≤ 8000 bytes). */
+    notify(channelName: string, payload: string = "") {
+        return this.conn.notify(channelName, payload)
     }
 
 

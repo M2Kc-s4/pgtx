@@ -43,7 +43,6 @@ export class Connection {
     private _closing: Resolvers<Future<void, PostgresError>> | null = null
     private _closed = false
     private _reconnecting: Future<void, PostgresError> | null = null
-    private _inTransaction = false
 
     private _socket: SocketConnector
 
@@ -185,11 +184,6 @@ export class Connection {
             return Future.reject(ErrConnectionClosed)
         }
 
-        if (this._inTransaction) {
-            this._logError(ErrTransactionInProgress)
-            return Future.reject(ErrTransactionInProgress)
-        }
-
         const {text, args} = compileSqlTemplate(templates, params)
 
         const resolvers = Future.withResolvers<T[], PostgresError>()
@@ -272,11 +266,6 @@ export class Connection {
             return Future.reject(ErrConnectionClosed)
         }
 
-        if (this._inTransaction) {
-            this._logError(ErrTransactionInProgress)
-            return Future.reject(ErrTransactionInProgress)
-        }
-
         const {text, args} = compileSqlTemplate(templates, params)
 
         const resolvers = Future.withResolvers<void, PostgresError>()
@@ -357,11 +346,6 @@ export class Connection {
         if (this.isClosed) {
             this._logError(ErrConnectionClosed)
             throw ErrConnectionClosed
-        }
-
-        if (this._inTransaction) {
-            this._logError(ErrTransactionInProgress)
-            throw (ErrTransactionInProgress)
         }
 
         const {text, args} = compileSqlTemplate(templates, params)
@@ -459,7 +443,6 @@ export class Connection {
         return Begin()
             .andThen(() => this.execute`begin`)    
             .andThen(() =>  {
-                this._inTransaction = true
                 const tx = new Transaction(this)
 
                 return Future.of(() => txCallback(tx))
@@ -470,7 +453,6 @@ export class Connection {
                         if (tx.isActive) return tx.rollback()
                     })
             })
-            .finally(() => this._inTransaction = false)
     }
 
 
