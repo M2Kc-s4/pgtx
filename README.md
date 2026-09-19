@@ -106,6 +106,10 @@ venue.footprint.points  // PgPoint[]
 venue.frontage.a.y      // number
 venue.openHours.months  // number
 ```
+
+
+For a complete list of supported PostgreSQL types, their JavaScript input/output types, and string formats, see the [PostgreSQL Data Types](./DATATYPES.md) reference.
+
  
 `int8` and `int8[]` follow the same principle at the config level: set `int8toBigint` on the pool and the values you get back — and the types you write against them — are `bigint` instead of `number`, with no manual casting at the call site:
  
@@ -172,26 +176,32 @@ Errors don't leak across a batch, either. If one query in a pipelined group fail
 
 ## Extra bits
 
-### Transactions and savepoints
+### Transactions and nested calls
 
-Transactions are explicit and composable:
+Transactions in Pgtx are dead simple. 
+
+If your atomic Use Cases call each other, Pgtx handles it automatically under the hood via a recursive transaction counter. 
 
 ```typescript
+// Use Case 1: Transfer money
 await pool.begin(async tx => {
-  await tx.query`UPDATE accounts SET balance = balance - ${amount}`
-  await tx.query`UPDATE accounts SET balance = balance + ${amount}`
+  await tx.execute`UPDATE accounts SET balance = balance - 100 WHERE id = 1`
+  
+  // Just pass the same db instance into another independent Use Case:
+  await createAuditLog(tx, { action: 'transfer' }) 
 })
+
+// Use Case 2: Audit logging (can run standalone or inside another transaction)
+async function createAuditLog(tx: Connection, data: any) {
+  // Pgtx detects that a transaction is already in progress, 
+  // transparently drops a SAVEPOINT, and handles isolated rollbacks if this block fails.
+  await tx.begin(async nestTx => {
+    await nestTx.execute`INSERT INTO audit_logs ${sql.insert(data)}`
+  })
+}
 ```
 
-Use savepoints when only part of a transaction should be rolled back:
-
-```typescript
-await tx.savepoint(async sp => {
-  await sp.query`INSERT INTO audit_log ${event}`
-})
-```
- 
-For a complete list of supported PostgreSQL types, their JavaScript input/output types, and string formats, see the [PostgreSQL Data Types](./DATATYPES.md) reference.
+If a block throws an error, Pgtx automatically issues a `ROLLBACK` (or `ROLLBACK TO SAVEPOINT` if nested) and rejects the Future. If it succeeds, it handles `COMMIT` / `RELEASE`. You just write your SQL and focus on your business invariants.
 
 ---
 
@@ -283,7 +293,7 @@ class Connection {
   query<T>(strings: TemplateStringsArray, ...values: any[]): Future<T[], PostgresError>
   execute(strings: TemplateStringsArray, ...values: any[]): Future<void, PostgresError>
   stream<T>(strings: TemplateStringsArray, ...values: any[]): ReadableStream<T>
-  begin<T>(callback: (tx: Transaction) => Promise<T>): Future<T, unknown>
+  begin<T>(callback: (db: Connection) => Promise<T>): Future<T, unknown>
   notify(channelName: string, payload?: string): Future<void, PostgresError>
   listen(channelName: string, callback: (payload: string) => void): Future<void, PostgresError>
   unlisten(channelName: string, callback: (payload: string) => void): Future<void, PostgresError>
@@ -317,7 +327,7 @@ class Pool {
   query<T>(strings: TemplateStringsArray, ...values: any[]): Future<T[], PostgresError>
   execute(strings: TemplateStringsArray, ...values: any[]): Future<void, PostgresError>
   stream<T>(strings: TemplateStringsArray, ...values: any[]): ReadableStream<T>
-  begin<T>(callback: (tx: Transaction) => Promise<T>): Future<T, unknown>
+  begin<T>(callback: (db: Connection) => Promise<T>): Future<T, unknown>
   notify(channelName: string, payload?: string): Future<void, PostgresError>
   listen(channel: string, callback: (payload: string) => void): Future<() => Future<void, PostgresError>, PostgresError>
   withAcquire<T>(fn: (conn: Connection) => Promise<T>): Future<T, unknown>
@@ -336,22 +346,6 @@ interface PoolPartialConfig extends ConnectionPartialConfig {
 }
 ```
 
-### `Transaction`
-
-```typescript
-class Transaction {
-  query<T>(strings: TemplateStringsArray, ...values: any[]): Future<T[], PostgresError>
-  execute(templates: TemplateStringsArray, ...params: any[]): Future<void, PostgresError>
-  stream<T extends Row>(templates: TemplateStringsArray, ...params: any[]): ReadableStream<T>
-  notify(channelName: string, payload?: string): Future<void, PostgresError>
-
-  commit(): Future<void, PostgresError>
-  rollback(): Future<void, PostgresError>
-  savepoint<T>(name: string, callback: (tx: Transaction) => Promise<T>): Future<T, unknown>
-
-  get isActive(): boolean
-}
-```
 
 ### `sql`
 

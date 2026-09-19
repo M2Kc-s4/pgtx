@@ -30,7 +30,7 @@ describe("Connection reconnect and close test", async () => {
             const before = await conn.query`SELECT 1 as value`
             assert.strictEqual(before[0].value, 1)
 
-            conn['_socket'].destroy()
+            conn['_connector'].destroy()
 
             await new Promise(r => setTimeout(r, 500))
 
@@ -39,7 +39,7 @@ describe("Connection reconnect and close test", async () => {
         })
 
         it("should queue and resolve queries issued during an active reconnect", async () => {
-            conn['_socket'].destroy()
+            conn['_connector'].destroy()
 
             await new Promise(r => setTimeout(r, 500))
 
@@ -58,7 +58,7 @@ describe("Connection reconnect and close test", async () => {
             const parsedBefore = conn['_parsed'].size
             assert.ok(parsedBefore > 0)
 
-            conn['_socket'].destroy()
+            conn['_connector'].destroy()
 
             await new Promise(r => setTimeout(r, 50))
 
@@ -75,7 +75,7 @@ describe("Connection reconnect and close test", async () => {
                 received.push(payload)
             })
 
-            conn['_socket'].destroy()
+            conn['_connector'].destroy()
 
             await new Promise(r => setTimeout(r, 500))
 
@@ -89,7 +89,7 @@ describe("Connection reconnect and close test", async () => {
         it("should reject in-flight batch queue entries with ErrConnectionReconnecting on drop", async () => {
             const pending = conn.query`SELECT pg_sleep(0.5), 1 as value`
 
-            conn['_socket'].destroy()
+            conn['_connector'].destroy()
 
             await rejects(async () => await pending)
             await new Promise(r => setTimeout(r, 500))
@@ -113,7 +113,7 @@ describe("Connection reconnect and close test", async () => {
             }
             
 
-            conn['_socket'].destroy()
+            conn['_connector'].destroy()
 
             await new Promise(r => setTimeout(r, 500))
             
@@ -211,8 +211,8 @@ describe("Connection reconnect and close test", async () => {
             const closePromise = conn.close()
 
             const destroySpy = { called: false }
-            const originalDestroy = conn['_socket'].destroy.bind(conn['_socket'])
-            conn['_socket'].destroy = () => {
+            const originalDestroy = conn['_connector'].destroy.bind(conn['_connector'])
+            conn['_connector'].destroy = () => {
                 destroySpy.called = true
                 return originalDestroy()
             }
@@ -236,7 +236,7 @@ describe("Connection reconnect and close test", async () => {
 
             conn['_performReconnect'] = () => {reconnectCalled = true; return Ok()}
 
-            conn['_socket'].destroy()
+            conn['_connector'].destroy()
 
             await new Promise(r => setTimeout(r, 50))
             assert.strictEqual(reconnectCalled, false)

@@ -1,5 +1,4 @@
 import { Connection } from "./connection"
-import { Transaction } from "./transaction"
 import { Queue, RingQueue } from "./queue";
 import { Begin, Future, Ok } from "fluent-future";
 import { ErrPoolClosed, PostgresError } from "./error";
@@ -106,7 +105,7 @@ export class Pool {
      *   await tx.query`UPDATE accounts SET balance = balance - 10 WHERE id = 1`
      * })
      */
-    begin<T>(txCallback: (transaction: Transaction) => Promise<T>) {
+    begin<T>(txCallback: (transaction: Connection) => Promise<T>) {
         return Begin()
             .andThen(() => this.acquire())
             .andThen(conn => 

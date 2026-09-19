@@ -19,6 +19,29 @@ export abstract class Query {
 }
 
 
+export class ParseQuery extends Query {
+    constructor(
+        public text: QueryText,
+        public meta: StatementMeta,
+        public resolvers: Resolvers<Future<StatementMeta, PostgresError>>,
+        timeout: number
+    )  {
+        super(timeout)
+    }    
+    
+    error(cause: PostgresError) {
+        clearTimeout(this._timer)
+        this.resolvers.reject(cause)
+    }
+
+
+    complete() {
+        clearTimeout(this._timer)
+        this.resolvers.resolve(this.meta)
+    }
+}
+
+
 export class CollectQuery<T extends Row> extends Query {
     private _rows: T[] = []
 
@@ -108,26 +131,6 @@ export class StreamQuery<T> extends Query {
     }
 }
 
-export class ParseQuery extends Query {
-    constructor(
-        public text: QueryText,
-        public meta: StatementMeta,
-        public resolvers: Resolvers<Future<StatementMeta, PostgresError>>,
-        timeout: number
-    )  {
-        super(timeout)
-    }    
-    
-    error(cause: PostgresError) {
-        clearTimeout(this._timer)
-        this.resolvers.reject(cause)
-    }
 
-
-    complete() {
-        clearTimeout(this._timer)
-        this.resolvers.resolve(this.meta)
-    }
-}
 
 export type PostgresQuery = ParseQuery | CollectQuery<any> | StreamQuery<any> | ExecuteQuery

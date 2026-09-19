@@ -1,4 +1,3 @@
-import { Future } from "fluent-future"
 import { Connection } from "./connection"
 import { PostgresError } from "./error"
 import { DataTypeOid } from "./protocol/constants"
@@ -6,11 +5,6 @@ import { DataTypeOid } from "./protocol/constants"
 export type Branded<T, Brand> = T & {__brand: Brand}
 
 export type ValueOF<T extends Record<string, unknown>> = T[keyof T]
-
-export type CompiledSqlQuery = {
-    text: string, 
-    args: (string | null)[],
-}
 
 export type ClauseStrategyParams = {
     text: string,
@@ -24,7 +18,7 @@ export type ColumnDescription = {
 
 export type SSLMode = 'disable' | 'prefer' | 'require'
 
-type LogLevel = "none" | "error" | "notice" | "query"
+export type LogLevel = "none" | "error" | "notice" | "query"
 
 export type ConnectionPartialConfig = {
     user: string
@@ -54,6 +48,8 @@ export type ConnectionConfig = {
     ssl: SSLMode
     caPath?: string
 }
+
+export type ConnectorConfig = Pick<ConnectionConfig, 'syncSсhedule'>
 
 
 export type StatementName = Branded<string, 'StatementName'>
@@ -89,8 +85,10 @@ export type Waiter = {
 export type Row = Record<string, any>
 
 
-export type Resolvers<T extends Future<any>> = {
-    future: T
-    resolve: (value: T extends Future<infer I> ? I : never) => void
-    reject: (cause: T extends Future<any, infer E> ? E : never) => void
-}
+export type PgPoint = { x: number, y: number }
+export type PgLine = { a: number, b: number, c: number }
+export type PgLineSegment = { a: PgPoint, b: PgPoint }
+export type PgBox = { high: PgPoint, low: PgPoint }
+export type PgPath = { closed: boolean, points: PgPoint[] }
+export type PgPolygon = { points: PgPoint[] }
+export type PgInterval = { months: number, days: number, microseconds: number }

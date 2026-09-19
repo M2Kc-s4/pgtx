@@ -80,7 +80,7 @@ const server = createServer(async (req, res) => {
     }
 
     res.writeHead(200, { 'Content-Type': 'application/json' })
-    res.end(JSON.stringify(user))
+    res.end(JSON.stringify(user[0]))
     return
   }
 

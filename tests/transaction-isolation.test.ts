@@ -1,11 +1,10 @@
 import { after, before, describe, it } from "node:test"
 import { Pool, sql } from "../src"
-import assert, { rejects, throws } from "assert"
+import assert, { rejects } from "assert"
 
 const tablename = "transaction_isolation_test"
 
-type Table = {id: number, status: string}
-
+type Table = { id: number, status: string }
 
 describe("Transaction isolation test", async () => {
     const pool = new Pool({
@@ -17,6 +16,7 @@ describe("Transaction isolation test", async () => {
         max: Number(process.env.PGMAX),
     })
 
+    
     before(async () => {
         await pool.query`
             create table if not exists ${sql.literal(tablename)} (
@@ -25,8 +25,9 @@ describe("Transaction isolation test", async () => {
             );`
         await pool.query`
             truncate table ${sql.literal(tablename)}
-            `
+        `
     })
+
 
     after(async () => {
         await pool.close()
@@ -34,25 +35,29 @@ describe("Transaction isolation test", async () => {
 
     
     it("transaction test", async () => {
-        await pool.begin(async tx => {
-            await tx.query`
-            insert into ${sql.ident(tablename)} 
-            ${sql.insert<Table>({id: 1, status: 'success'}, {id: 2, status: "stable"})}`
+        await pool.begin(async db => {
+            await db.query`
+                insert into ${sql.ident(tablename)} 
+                ${sql.insert<Table>({ id: 1, status: 'success' }, { id: 2, status: "stable" })}`
         })
 
         const rows = await pool.query<Table>`SELECT * from ${sql.ident(tablename)}`
-        assert.deepStrictEqual(rows, [{id: 1, status: 'success'}, {id: 2, status: "stable"}])
+        assert.deepStrictEqual(rows, [{ id: 1, status: 'success' }, { id: 2, status: "stable" }])
     })
 
 
     it("isolation test", async () => {
-        await pool.query`
-        truncate table ${sql.ident(tablename)}`
+        await pool.query`truncate table ${sql.ident(tablename)}`
 
-        await pool.begin(async tx => {
-            await tx.query`insert into ${sql.ident(tablename)} ${sql.insert<Table>({id: 1, status: 'success'}, {id: 2, status: "stable"})}`
-            await tx.rollback()
-        })
+        await rejects(
+            async () => {
+                await pool.begin(async db => {
+                    await db.query`insert into ${sql.ident(tablename)} ${sql.insert<Table>({ id: 1, status: 'success' }, { id: 2, status: "stable" })}`
+                    throw new Error("force rollback")
+                })
+            },
+            new Error("force rollback")
+        )
 
         const rows = await pool.query<Table>`SELECT * from ${sql.ident(tablename)}`
         assert.deepStrictEqual(rows, [])
@@ -60,53 +65,61 @@ describe("Transaction isolation test", async () => {
 
 
     it("parrallel transaction isolation test", async () => {
-        await pool.query`
-        truncate table ${sql.ident(tablename)}`
+        await pool.query`truncate table ${sql.ident(tablename)}`
 
-        const conn1 = await pool.acquire()
-        const conn2 = await pool.acquire()
+        await pool.begin(async tx1 => {            
+            await pool.begin(async tx2 => {
+                await tx2.query`
+                    insert into ${sql.ident(tablename)} 
+                    ${sql.insert<Table>({ id: 1, status: 'success' }, { id: 2, status: "stable" })}
+                `
 
-        await conn1.begin(async tx1 => {
-            await tx1.query`insert into ${sql.ident(tablename)} ${sql.insert<Table>({id: 1, status: 'success'}, {id: 2, status: "stable"})}`
+                const [rowInDb1BeforeCommit] = await tx1.query`SELECT count(*)::int from ${sql.ident(tablename)}`
+                assert.deepStrictEqual(rowInDb1BeforeCommit.count, 0)
+            }) 
 
-            await conn2.begin(async tx2 => {
-                const [rowBeforeCommit] = await tx2.query`SELECT count(*) from ${sql.ident(tablename)}`
-                assert.deepStrictEqual(rowBeforeCommit.count, 0)
-
-                await tx1.commit()
-                
-                const [rowAfterCommit] = await tx2.query`SELECT count(*) from ${sql.ident(tablename)}`
-                
-                assert.deepStrictEqual(rowAfterCommit.count, 2)
-            })
+            const [rowInDb1AfterCommit] = await tx1.query`SELECT count(*)::int from ${sql.ident(tablename)}`
+            assert.deepStrictEqual(rowInDb1AfterCommit.count, 2)
         })
-
-        pool.release(conn1); pool.release(conn2);
     })
 
+
     it("savepoints isolation test", async () => {
-        await pool.query`
-        truncate table ${sql.ident(tablename)}`
+        await pool.query`truncate table ${sql.ident(tablename)}`
 
-        await pool.begin(async tx => {
-            await tx.query`insert into ${sql.ident(tablename)} ${sql.insert<Table>({id: 1, status: 'success'})}`
+        await pool.begin(async db => {
+            await db.query`insert into ${sql.ident(tablename)} ${sql.insert<Table>({ id: 1, status: 'success' })}`
 
-            await tx.savepoint("savepoint 1", async spt => {
-                await tx.query`insert into ${sql.ident(tablename)} ${sql.insert<Table>({id: 2, status: "stable"})}`
+            await db.begin(async dbInternal => {
+                await dbInternal.query`insert into ${sql.ident(tablename)} ${sql.insert<Table>({ id: 2, status: "stable" })}`
+
+                await rejects(
+                    async () => 
+                        await dbInternal.begin(async dbDeepInternal => {
+                            await dbDeepInternal.query`
+                                insert into ${sql.ident(tablename)} 
+                                ${sql.insert<Table>({ id: 3, status: 'fail' }, { id: 4, status: "broken" })}
+                            `
+                            throw new Error("deep level 2 savepoint failed")
+                        }),
+                    new Error("deep level 2 savepoint failed")
+                )
             })
 
             await rejects(
                 async () => 
-                    await tx.savepoint("savepoint 2", async spt => {
-                        await spt.query`insert into ${sql.ident(tablename)} ${sql.insert<Table>({id: 3, status: 'success'}, {id: 4, status: "stable"})}`
-                        throw new Error("savepoint failed")
+                    await db.begin(async dbInternal2 => {
+                        await dbInternal2.query`insert into ${sql.ident(tablename)} ${sql.insert<Table>({ id: 5, status: 'should_not_exist' })}`
+                        throw new Error("level 1 savepoint failed")
                     }),
-                new Error("savepoint failed")
+                new Error("level 1 savepoint failed")
             )
         })
 
-        const rows = await pool.query<Table>`SELECT * from ${sql.ident(tablename)}`
-        
-        assert.deepStrictEqual(rows, [{id: 1, status: 'success'}, {id: 2, status: "stable"}])
+        const rows = await pool.query<Table>`SELECT * from ${sql.ident(tablename)} order by id`
+        assert.deepStrictEqual(rows, [
+            { id: 1, status: 'success' }, 
+            { id: 2, status: "stable" }
+        ])
     })
 })

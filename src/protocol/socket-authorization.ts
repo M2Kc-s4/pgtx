@@ -115,8 +115,8 @@ export const authorizeSocket = (socket: Socket, config: ConnectionConfig) => {
     let serverMessage = ''
 
 
-    const connector = new SocketConnector(socket, 
-        handle,
+    const connector = new SocketConnector(
+        config, socket, handle,
         () => reject(ErrSocketFailedDuringAuth)
     )
 
@@ -161,7 +161,7 @@ export const authorizeSocket = (socket: Socket, config: ConnectionConfig) => {
 
             case AuthenticationCodes.CleartextPassword: {
                 if (!config.password) return reject(ErrPasswordRequired)
-                connector.write(writer.writePassword(config.password))
+                connector.writeNowait(writer.writePassword(config.password))
                 writer.clear()
             } break
 
@@ -171,7 +171,7 @@ export const authorizeSocket = (socket: Socket, config: ConnectionConfig) => {
                 if (!config.password) return reject(ErrPasswordRequired)
 
                 const password = encryptMd5(config.password, config.user, salt)
-                connector.write(writer.writePassword(password))
+                connector.writeNowait(writer.writePassword(password))
                 writer.clear()
             } break
 
@@ -182,7 +182,7 @@ export const authorizeSocket = (socket: Socket, config: ConnectionConfig) => {
 
                 clientMessage = `n=${config.user},r=${nonce}`
 
-                connector.write(writer.writeSaslInitial('SCRAM-SHA-256', `n,,${clientMessage}`))
+                connector.writeNowait(writer.writeSaslInitial('SCRAM-SHA-256', `n,,${clientMessage}`))
                 writer.clear()
             } break
 
@@ -211,7 +211,7 @@ export const authorizeSocket = (socket: Socket, config: ConnectionConfig) => {
 
                 const clientFinalMessage = `${clientFinalMessageWithoutProof},p=${clientProof}`
 
-                connector.write(writer.writeSaslResponse(clientFinalMessage))
+                connector.writeNowait(writer.writeSaslResponse(clientFinalMessage))
                 writer.clear()
             } break
 
@@ -223,7 +223,7 @@ export const authorizeSocket = (socket: Socket, config: ConnectionConfig) => {
     }
 
 
-    connector.write(writer.writeStartup(config.user, config.database))
+    connector.writeNowait(writer.writeStartup(config.user, config.database))
     writer.clear()
 
     return future

@@ -1,6 +1,6 @@
 import { Clause,  } from "./abstract.clause";
 import { compileSqlTemplate } from "../utils";
-import { ClauseStrategyParams, CompiledSqlQuery } from "../types";
+import { ClauseStrategyParams } from "../types";
 
 export class FragmentClause extends Clause {
     private constructor(

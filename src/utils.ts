@@ -1,5 +1,7 @@
 import { Clause } from "./clauses/abstract.clause"
-import { ClauseStrategyParams, QueryText } from "./types"
+import { PostgresError } from "./error"
+import { CollectQuery, ExecuteQuery, PostgresQuery, StreamQuery } from "./query"
+import { ClauseStrategyParams, LogLevel, QueryText } from "./types"
 
 const cache = new WeakMap<TemplateStringsArray, string>()
 
@@ -33,4 +35,37 @@ export function compileSqlTemplate(templates: TemplateStringsArray, args: unknow
     !args.some(value => value instanceof Clause) && cache.set(templates, query.text)
     
     return query as {text: QueryText, args: unknown[]}
+}
+
+export function logQuery(query: StreamQuery<any> | CollectQuery<any> | ExecuteQuery, logLevel: LogLevel) {
+    if (logLevel === 'query') { 
+        console.log(
+            `\n\x1b[36m┌─ QUERY ─────────────────────────────────────────\x1b[0m\n`
+            + `\x1b[36m│\x1b[0m ${query.text}\n` 
+            + `${query.args.length !== 0 ? `\x1b[36m│\x1b[0m \x1b[90mArguments:\x1b[0m [${query.args}]\n` : ''}` 
+            + `\x1b[36m└────────────────────────────────────────────────\x1b[0m` 
+        ) 
+    }
+}
+
+
+export function logNotice(notice: PostgresError, logLevel: LogLevel) {
+    if (logLevel === 'notice' || logLevel === 'query') { 
+        console.log( 
+            `\n\x1b[33m┌─ NOTICE ───────────────────────────────────────\x1b[0m\n` 
+            + `\x1b[33m│\x1b[0m ${notice}\n` 
+            + `\x1b[33m└────────────────────────────────────────────────\x1b[0m\n` 
+        ) 
+    }
+}
+
+
+export function logError(error: PostgresError, logLevel: LogLevel) {
+    if (logLevel === 'error' || logLevel === 'notice' || logLevel === 'query') { 
+        console.log( 
+            `\n\x1b[31m┌─ ERROR ────────────────────────────────────────\x1b[0m\n` 
+            + `\x1b[31m│\x1b[0m ${error}\n` 
+            + `\x1b[31m└────────────────────────────────────────────────\x1b[0m\n` 
+        ) 
+    }
 }
