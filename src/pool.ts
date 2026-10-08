@@ -25,7 +25,7 @@ export class Pool {
     constructor(config: PoolPartialConfig) {
         this.config =  {
             ...config, 
-            max: config.max ?? 20
+            max: config.max || 20
         }
         this._available = new RingQueue(this.config.max)
     }
