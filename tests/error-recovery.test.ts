@@ -3,7 +3,7 @@ import { Connection,  sql } from "../src"
 import assert from "assert"
 
 describe("PostgreSQL Pipeline Batching Error Recovery (Monaic Retry Feature)", async () => {
-    const conn = await Connection.new({
+    const conn  = new Connection({
         host: process.env.PGHOST!,
         user: process.env.PGUSER!,
         password: process.env.PGPASSWORD!,
@@ -11,6 +11,8 @@ describe("PostgreSQL Pipeline Batching Error Recovery (Monaic Retry Feature)", a
         port: Number(process.env.PGPORT),
         int8toBigint: true
     })
+
+    await conn.connect()
 
     const pipelineTestTable = "pipeline_error_recovery_test"
 

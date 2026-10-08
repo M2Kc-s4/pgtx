@@ -1,5 +1,5 @@
 import { createServer } from 'node:http';
-import { Pool, sql } from '@m2k-5f/pgtx';
+import { Pool, sql } from './src';
 import { Ok } from 'fluent-future';
 import { ErrQueryTimeout } from './dist/error';
 

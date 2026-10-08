@@ -17,7 +17,7 @@ export type RequestType = ValueOF<typeof RequestTypes>
 export const ResponseTypes = {
     RowDescription: 84,       // "T"
     DataRow: 68,              // "D"
-    ComandComplete: 67,       // "C"
+    CommandComplete: 67,       // "C"
     ReadyForQuery: 90,        // "Z"
     ErrorResponse: 69,        // "E"
     NoticeResponse: 78,       // "N"
@@ -32,7 +32,8 @@ export const ResponseTypes = {
     Notice: 78,               // "N"
     NotificationResponse: 65, // "A"
     SSLOk: 83,                // "S"
-    SSLDenied: 78             // "N"
+    SSLDenied: 78,            // "N"
+    EmptyQueryResponse: 73    // "I"
 } as const
 
 export type ResponseType = ValueOF<typeof ResponseTypes>

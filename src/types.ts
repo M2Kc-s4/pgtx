@@ -20,6 +20,17 @@ export type SSLMode = 'disable' | 'prefer' | 'require'
 
 export type LogLevel = "none" | "error" | "notice" | "query"
 
+
+export type ConnectionHandlers = {
+    onConnect?: () => void
+    onClose?: () => void
+    onError?: (error: PostgresError) => void
+    onNotice?: (notice: PostgresError) => void
+    onNotify?: Record<string, (payload: string) => void> | ((channel: string, payload: string) => void)
+    onQuery?: (text: string, args: unknown[]) => void
+}
+
+
 export type ConnectionPartialConfig = {
     user: string
     password?: string
@@ -29,9 +40,14 @@ export type ConnectionPartialConfig = {
     logLevel?: LogLevel,
     int8toBigint?: boolean,
     queryTimeout?: number
-    syncSсhedule?: "beforeMicrotask" | "afterMicrotask" | "Immediate",
     ssl?: SSLMode
     caPath?: string
+    onConnect?: () => void
+    onClose?: () => void
+    onError?: (error: PostgresError) => void
+    onNotice?: (notice: PostgresError) => void
+    onNotify?: Record<string, (payload: string) => void> | ((channel: string, payload: string) => void)
+    onQuery?: (text: string, args: unknown[]) => void
 }
 
 
@@ -44,13 +60,9 @@ export type ConnectionConfig = {
     logLevel: LogLevel,
     int8toBigint: boolean,
     queryTimeout: number
-    syncSсhedule: "beforeMicrotask" | "afterMicrotask" | "Immediate"
     ssl: SSLMode
     caPath?: string
-}
-
-export type ConnectorConfig = Pick<ConnectionConfig, 'syncSсhedule'>
-
+} & ConnectionHandlers
 
 export type StatementName = Branded<string, 'StatementName'>
 

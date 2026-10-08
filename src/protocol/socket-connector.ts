@@ -3,50 +3,30 @@ import { DescribeType, ResponseType } from './constants'
 import { ConnectionResponseBuffer } from './connection-response-reader'
 import { ConnectionRequestBuffer } from './connection-request-writer'
 import { ErrSocketFailed, PostgresError } from '../error'
-import { ConnectorConfig } from '../types'
 import { CollectQuery, ExecuteQuery, ParseQuery, StreamQuery } from '../query'
-import { nextTick } from 'process'
 
-
-const shedule = {
-    Immediate: setImmediate,
-    afterMicrotask: setTimeout,
-    beforeMicrotask: nextTick
-}
 
 export class SocketConnector {
     private _requestBuffer = ConnectionRequestBuffer.new(65536)
     private _residualResponseBuffer: Buffer | null = null
     private _scheduled = false
-    private _destroyed = false
+    private _closed = false
 
-    private _onError: (error: unknown) => void
     private _onClose: () => void
     private _onData: (buffer: Buffer) => void
 
 
     constructor(
-        private _config: ConnectorConfig,
         private _socket: Socket,
         onData: (type: ResponseType, length: number, reader: ConnectionResponseBuffer) => void,
-        onError: (error: unknown) => void
-    ) {        
-        this._onError = (err) => {
-            if (this._destroyed) return
-
-            this._destroyed = true
-            onError(err)
-            this.destroy()
+        onClose: () => void
+    ) {
+        this._onClose = function() {
+            this._closed = true
+            onClose()
         }
 
-        this._onClose = () => {
-            if (this._destroyed) return
-            this._destroyed = true
-            onError(ErrSocketFailed)
-            this.destroy()
-        }
-
-        this._onData = buffer => {
+        this._onData = function(buffer) {
             const currentBuffer = this._residualResponseBuffer 
                 ? Buffer.concat([this._residualResponseBuffer, buffer as Buffer]) 
                 : buffer as Buffer
@@ -68,7 +48,7 @@ export class SocketConnector {
 
         this._socket.setKeepAlive(true, 10000)
         this._socket.on('data', this._onData)
-        this._socket.on('error', this._onError)
+        this._socket.on('error', () => {})
         this._socket.on('close', this._onClose)
     }
 
@@ -78,7 +58,7 @@ export class SocketConnector {
             this._requestBuffer.clear()
             this._scheduled = true
             
-            shedule[this._config.syncSсhedule](() => {
+            setImmediate(() => {
                 this._scheduled = false
                 this._requestBuffer.hasMore && this._socket.write(this._requestBuffer.asBuffer())
                 this._requestBuffer.clear()
@@ -118,7 +98,6 @@ export class SocketConnector {
 
 
     unwrapSocket() {
-        this._socket.off('error', this._onError)
         this._socket.off("data", this._onData)
         this._socket.off('close', this._onClose)
 
@@ -126,7 +105,11 @@ export class SocketConnector {
     }
 
 
-    destroy() {
+    close() {
         this._socket.destroy()
+    }
+
+    get isClosed() {
+        return this._closed
     }
 }

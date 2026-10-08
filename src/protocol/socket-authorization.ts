@@ -12,7 +12,7 @@ import { ConnectionRequestBuffer } from "./connection-request-writer"
 import { ConnectionResponseBuffer } from "./connection-response-reader"
 
 
-export const createSocket = (config: ConnectionConfig) => {
+export function createSocket(config: ConnectionConfig) {
     const { future, resolve, reject } = Future.withResolvers<Socket, PostgresError>()
 
     const socket = createConnection({host: config.host, port: config.port})
@@ -24,25 +24,21 @@ export const createSocket = (config: ConnectionConfig) => {
 }
 
 
-export const upgradeSocket = (socket: Socket, config: ConnectionConfig) => {
+export function upgradeSocket(socket: Socket, config: ConnectionConfig) {
     if (config.ssl === 'disable') return Future.resolve(socket)
 
     const { future, reject, resolve } = Future.withResolvers<Socket, PostgresError>()
 
     const writer = ConnectionRequestBuffer.new(2048)
 
-    const onError = () => {
-        cleanup()
+    function onError() {
         reject(ErrSocketFailedDuringAuth)
     }
+
     socket.once('error', onError)
 
-    const cleanup = () => {
-        socket.off('error', onError)
-    }
-
     socket.once('data', (data: Buffer) => {
-        cleanup()
+        socket.off('error', onError)
 
         const responseCode = data.toString('utf8', 0, 1)
 
@@ -106,7 +102,7 @@ export const upgradeSocket = (socket: Socket, config: ConnectionConfig) => {
 }
 
 
-export const authorizeSocket = (socket: Socket, config: ConnectionConfig) => {
+export function authorizeSocket(socket: Socket, config: ConnectionConfig) {
     const { future, reject, resolve } = Future.withResolvers<Socket, PostgresError>()
     const writer = ConnectionRequestBuffer.new(2048)
 
@@ -116,15 +112,14 @@ export const authorizeSocket = (socket: Socket, config: ConnectionConfig) => {
 
 
     const connector = new SocketConnector(
-        config, socket, handle,
+        socket, handle,
         () => reject(ErrSocketFailedDuringAuth)
     )
-
 
     function handle(type: ResponseType, length: number, reader: ConnectionResponseBuffer) {
         switch (type) {
             case ResponseTypes.Authentication: {
-                Authentication(length, reader)
+                authentication(length, reader)
             } break
 
 
@@ -135,7 +130,7 @@ export const authorizeSocket = (socket: Socket, config: ConnectionConfig) => {
 
             case ResponseTypes.ErrorResponse: {                            
                 const error = reader.readErrorResponse()
-                connector.destroy()
+                connector.close()
                 reject(error)
             } return
 
@@ -154,7 +149,7 @@ export const authorizeSocket = (socket: Socket, config: ConnectionConfig) => {
     }
 
 
-    function Authentication(length: number, reader: ConnectionResponseBuffer) {
+    function authentication(length: number, reader: ConnectionResponseBuffer) {
         switch (reader.readAuthentication()) {
             case AuthenticationCodes.Ok: break
 
@@ -199,7 +194,7 @@ export const authorizeSocket = (socket: Socket, config: ConnectionConfig) => {
                 const iterations = parseInt(parts.i, 10)
 
                 if (!serverNonce.startsWith(nonce)) {
-                    connector.destroy()
+                    connector.close()
                     return reject(ErrNonceMismatch)
                 }
 

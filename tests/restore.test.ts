@@ -1,269 +1,349 @@
 import { after, describe, it } from "node:test"
-import { ErrConnectionClosed, PostgresError } from "../src/error"
 import assert, { rejects } from "assert"
-import { Future, Ok } from "fluent-future"
-import { Pool, sql } from "../src"
+import { Pool } from "../src"
+import { ErrPoolClosed } from "../src/error"
 
-describe("Connection reconnect and close test", async () => {
-    const pool = new Pool({
-        host: process.env.PGHOST!,
-        user: process.env.PGUSER!,
-        password: process.env.PGPASSWORD!,
-        database: process.env.PGDATABASE!,
-        port: Number(process.env.PGPORT),
-        max: 2
-    })
+const config = {
+    host: process.env.PGHOST!,
+    user: process.env.PGUSER!,
+    password: process.env.PGPASSWORD!,
+    database: process.env.PGDATABASE!,
+    port: Number(process.env.PGPORT),
+    logLevel: 'error',
+} as const
 
-    after(async () => {
-        await pool.close()
-    })
+describe("Pool", () => {
 
-    describe("Reconnect behavior", async () => {
-        const conn = await pool.acquire()
+    describe("Dead connections", async () => {
+        const pool = new Pool({ ...config, max: 2 })
 
         after(async () => {
-            pool.release(conn)
+            await pool.close()
         })
 
+        it("should drop a connection with a dead socket on release", async () => {
+            const conn = await pool.acquire()
+            assert.strictEqual(pool.total, 1)
 
-        it("should recover and serve queries after the socket is forcibly destroyed", async () => {
-            const before = await conn.query`SELECT 1 as value`
-            assert.strictEqual(before[0].value, 1)
-
-            conn['_connector'].destroy()
-
-            await new Promise(r => setTimeout(r, 500))
-
-            const after = await conn.query`SELECT 2 as value`
-            assert.strictEqual(after[0].value, 2)
-        })
-
-        it("should queue and resolve queries issued during an active reconnect", async () => {
-            conn['_connector'].destroy()
-
-            await new Promise(r => setTimeout(r, 500))
-
-            const results = await Promise.all(
-                Array.from({length: 10}, (_, i) => conn.query`SELECT ${i}::int as value`)
-            )
-
-            for (let i = 0; i < 10; i++) {
-                assert.strictEqual(results[i][0].value, i)
-            }
-        })
-
-        it("should clear cached prepared statement metadata on reconnect", async () => {
-            await conn.query`SELECT 1 as value`
-
-            const parsedBefore = conn['_parsed'].size
-            assert.ok(parsedBefore > 0)
-
-            conn['_connector'].destroy()
-
-            await new Promise(r => setTimeout(r, 50))
-
-            const result = await conn.query`SELECT 1 as value`
-            
-            assert.ok(conn['_parsed'].size === 1)
-            assert.strictEqual(result[0].value, 1)
-        })
-
-        it("should restore LISTEN subscriptions after reconnect", async () => {
-            const received: string[] = []
-
-            await conn.listen("reconnect_channel", payload => {
-                received.push(payload)
-            })
-
-            conn['_connector'].destroy()
-
-            await new Promise(r => setTimeout(r, 500))
-
-            await conn.notify("reconnect_channel", "hello-after-reconnect")
-
+            conn['_connector']!.close()
             await new Promise(r => setTimeout(r, 100))
 
-            assert.deepStrictEqual(received, ["hello-after-reconnect"])
+            pool.release(conn)
+
+            assert.strictEqual(pool.total, 0)
+            assert.strictEqual(pool.size, 0)
         })
 
-        it("should reject in-flight batch queue entries with ErrConnectionReconnecting on drop", async () => {
-            const pending = conn.query`SELECT pg_sleep(0.5), 1 as value`
+        it("should not hand out a dead idle connection from acquire()", async () => {
+            const first = await pool.acquire()
+            pool.release(first)
+            assert.strictEqual(pool.size, 1)
 
-            conn['_connector'].destroy()
+            first['_connector']!.close()
+            await new Promise(r => setTimeout(r, 100))
 
-            await rejects(async () => await pending)
-            await new Promise(r => setTimeout(r, 500))
-        })
+            const second = await pool.acquire()
 
-        it("should keep retrying reconnect if the first attempt fails", async () => {
-            let attempts = 0
-            const originalPerformReconnect = conn['_performReconnect'].bind(conn)
+            assert.notStrictEqual(second, first)
+            assert.ok(second.isConnected)
 
-            conn['_performReconnect'] = () => {
-                attempts++
-
-                if (attempts === 1) {
-                    conn['_parsed'].clear()
-                    conn['_parsing'].clear()
-                    return Future.reject(new PostgresError("simulated reconnect failure"))
-                }
-
-                conn['_performReconnect'] = originalPerformReconnect
-                return originalPerformReconnect()
-            }
-            
-
-            conn['_connector'].destroy()
-
-            await new Promise(r => setTimeout(r, 500))
-            
-            assert.ok(attempts === 2, `expected at least 2 reconnect attempts, got ${attempts}`)
-
-            const result = await conn.query`SELECT 1 as value`
-            
+            const result = await second.query`SELECT 1 as value`
             assert.strictEqual(result[0].value, 1)
+
+            pool.release(second)
+            assert.strictEqual(pool.total, 1)
+        })
+
+        it("should skip dead idle connections in pool.query()", async () => {
+            const conn = await pool.acquire()
+            pool.release(conn)
+
+            conn['_connector']!.close()
+            await new Promise(r => setTimeout(r, 100))
+
+            const result = await pool.query`SELECT 2 as value`
+            assert.strictEqual(result[0].value, 2)
+        })
+
+        it("should skip dead idle connections in pool.execute()", async () => {
+            const conn = await pool.acquire()
+            pool.release(conn)
+
+            conn['_connector']!.close()
+            await new Promise(r => setTimeout(r, 100))
+
+            await pool.execute`SELECT 1`
+        })
+
+        it("should run pool.begin() on a fresh connection after a drop", async () => {
+            const conn = await pool.acquire()
+            pool.release(conn)
+
+            conn['_connector']!.close()
+            await new Promise(r => setTimeout(r, 100))
+
+            const result = await pool.begin(async tx => {
+                const rows = await tx.query`SELECT 3 as value`
+                return rows[0].value
+            })
+
+            assert.strictEqual(result, 3)
+        })
+
+        it("should reject in-flight queries when the socket drops and still recover", async () => {
+            const conn = await pool.acquire()
+
+            const pending = conn.query`SELECT pg_sleep(0.5), 1 as value`
+            const assertion = rejects(async () => await pending)
+
+            conn['_connector']!.close()
+            await assertion
+
+            pool.release(conn)
+
+            const result = await pool.query`SELECT 4 as value`
+            assert.strictEqual(result[0].value, 4)
+        })
+    })
+
+
+    describe("Limits and waiting", async () => {
+        it("should never exceed max connections under load", async () => {
+            const pool = new Pool({ ...config, max: 2 })
+
+            let peak = 0
+
+            await Promise.all(Array.from({ length: 10 }, (_, i) =>
+                pool.begin(async tx => {
+                    peak = Math.max(peak, pool.total)
+                    const rows = await tx.query`SELECT pg_sleep(0.05), ${i}::int as value`
+                    return rows[0].value
+                })
+            ))
+
+            assert.ok(peak <= 2, `peak was ${peak}`)
+
+            await pool.close()
+        })
+
+        it("should serve waiters in order once connections are released", async () => {
+            const pool = new Pool({ ...config, max: 1 })
+
+            const conn = await pool.acquire()
+
+            const order: number[] = []
+            const w1 = pool.acquire().then(c => { order.push(1); pool.release(c) })
+            const w2 = pool.acquire().then(c => { order.push(2); pool.release(c) })
+
+            pool.release(conn)
+            await Promise.all([w1, w2])
+
+            assert.deepStrictEqual(order, [1, 2])
+
+            await pool.close()
+        })
+
+        it("should give a waiter a fresh connection when the released one is dead", async () => {
+            const pool = new Pool({ ...config, max: 1 })
+
+            const conn = await pool.acquire()
+            const waiter = pool.acquire()
+
+            conn['_connector']!.close()
+            await new Promise(r => setTimeout(r, 100))
+
+            pool.release(conn)
+
+            const fresh = await waiter
+            assert.notStrictEqual(fresh, conn)
+
+            const result = await fresh.query`SELECT 5 as value`
+            assert.strictEqual(result[0].value, 5)
+
+            pool.release(fresh)
+            await pool.close()
+        })
+
+        it("should free the slot when a new connection fails to connect", async () => {
+            const pool = new Pool({ ...config, port: 1, max: 1 })
+
+            await rejects(async () => await pool.acquire())
+            assert.strictEqual(pool.total, 0)
+
+            // slot is free again, so a second attempt must not hang
+            await rejects(async () => await pool.acquire())
+            assert.strictEqual(pool.total, 0)
+
+            await pool.close()
+        })
+    })
+
+
+    describe("Handlers from config", async () => {
+        it("should apply onConnect and onError to every pooled connection", async () => {
+            let connects = 0
+            const errors: unknown[] = []
+
+            const pool = new Pool({
+                ...config,
+                max: 2,
+                onConnect: () => { connects++ },
+                onError: e => { errors.push(e) },
+            })
+
+            const a = await pool.acquire()
+            const b = await pool.acquire()
+            assert.strictEqual(connects, 2)
+
+            await rejects(async () => await a.query`SELECT * FROM table_that_does_not_exist_xyz`)
+            await rejects(async () => await b.query`SELECT * FROM table_that_does_not_exist_xyz`)
+            assert.strictEqual(errors.length, 2)
+
+            pool.release(a)
+            pool.release(b)
+            await pool.close()
+        })
+
+        it("should call onClose for each connection that drops", async () => {
+            let closes = 0
+            const pool = new Pool({ ...config, max: 2, onClose: () => { closes++ } })
+
+            const a = await pool.acquire()
+            const b = await pool.acquire()
+
+            a['_connector']!.close()
+            b['_connector']!.close()
+            await new Promise(r => setTimeout(r, 100))
+
+            assert.strictEqual(closes, 2)
+
+            pool.release(a)
+            pool.release(b)
+            await pool.close()
         })
     })
 
 
     describe("Close behavior", async () => {
-        it("should resolve immediately when closing an already-idle connection", async () => {
+        it("should close idle connections and reset counters", async () => {
+            const pool = new Pool({ ...config, max: 2 })
+
+            const a = await pool.acquire()
+            const b = await pool.acquire()
+            pool.release(a)
+            pool.release(b)
+            assert.strictEqual(pool.size, 2)
+
+            await pool.close()
+
+            assert.ok(pool.isClosed)
+            assert.ok(!pool.isOpened)
+            assert.ok(a.isClosed)
+            assert.ok(b.isClosed)
+            assert.strictEqual(pool.size, 0)
+            assert.strictEqual(pool.total, 0)
+        })
+
+        it("should be safe to call close() twice", async () => {
+            const pool = new Pool({ ...config, max: 1 })
+
+            await pool.close()
+            await pool.close()
+
+            assert.ok(pool.isClosed)
+        })
+
+        it("should reject everything after close", async () => {
+            const pool = new Pool({ ...config, max: 1 })
+            await pool.close()
+
+            await rejects(async () => await pool.acquire(), ErrPoolClosed)
+            await rejects(async () => await pool.query`SELECT 1`, ErrPoolClosed)
+            await rejects(async () => await pool.execute`SELECT 1`, ErrPoolClosed)
+            await rejects(async () => await pool.begin(async () => {}), ErrPoolClosed)
+            assert.throws(() => pool.stream`SELECT 1`, ErrPoolClosed)
+        })
+
+        it("should reject pending acquire() calls on close", async () => {
+            const pool = new Pool({ ...config, max: 1 })
+
             const conn = await pool.acquire()
+            const waiter = pool.acquire()
+            const assertion = rejects(async () => await waiter, ErrPoolClosed)
 
-            await conn.query`SELECT 1 as value`
+            await pool.close()
+            await assertion
 
-            const start = Date.now()
-            await conn.close()
-            const elapsed = Date.now() - start
+            pool.release(conn)
+        })
 
+        it("should close a connection that is released after the pool is closed, without throwing", async () => {
+            const pool = new Pool({ ...config, max: 1 })
+
+            const conn = await pool.acquire()
+            await pool.close()
+
+            assert.doesNotThrow(() => pool.release(conn))
+
+            await new Promise(r => setTimeout(r, 100))
             assert.ok(conn.isClosed)
-            assert.ok(!conn.isOpened)
-            assert.ok(elapsed < 100)
-            
-            pool.release(conn)
         })
 
-        it("should reject new queries immediately after close", async () => {
-            const conn = await pool.acquire()
-            await conn.close()
+        it("should keep the original result when release happens after close inside withAcquire", async () => {
+            const pool = new Pool({ ...config, max: 1 })
 
-            await rejects(
-                async () => await conn.query`SELECT 1 as value`,
-                ErrConnectionClosed
-            )
+            const result = await pool.withAcquire(async conn => {
+                const rows = await conn.query`SELECT 6 as value`
+                await pool.close()
+                return rows[0].value
+            })
 
-            pool.release(conn)
+            assert.strictEqual(result, 6)
+        })
+    })
+
+
+    describe("Streaming", async () => {
+        const pool = new Pool({ ...config, max: 2 })
+
+        after(async () => {
+            await pool.close()
         })
 
-        it("should be idempotent when close is called multiple times", async () => {
+        it("should stream rows through an idle connection", async () => {
             const conn = await pool.acquire()
-
-            await conn.close()
-            await conn.close()
-
-            assert.ok(conn.isClosed)
-            
             pool.release(conn)
-        })
 
-        it("should wait for in-flight queries to finish before closing", async () => {
-            const conn = await pool.acquire()
-
-            const pending = conn.query`SELECT pg_sleep(0.2), 1 as value`
-
-            const closePromise = conn.close()
-
-            assert.ok(conn.isClosed) 
-            assert.ok(!conn.isOpened)
-
-            const result = await pending
-            assert.strictEqual(result[0].value, 1)
-
-            await closePromise
-            assert.ok(conn.isClosed)
-            
-            pool.release(conn)
-        })
-
-        it("should reject queries issued while a drain-close is pending", async () => {
-            const conn = await pool.acquire()
-
-            const pending = conn.query`SELECT pg_sleep(0.2), 1 as value`
-            const closePromise = conn.close()
-
-            await rejects(
-                async () => await conn.query`SELECT 2 as value`,
-                ErrConnectionClosed
-            )
-
-            await pending
-            await closePromise
-            
-            pool.release(conn)
-        })
-
-        it("should destroy the underlying socket only after the batch queue is fully drained", async () => {
-            const conn = await pool.acquire()
-
-            const q1 = conn.query`SELECT pg_sleep(0.1), 1 as value`
-            const q2 = conn.query`SELECT pg_sleep(0.1), 2 as value`
-
-            const closePromise = conn.close()
-
-            const destroySpy = { called: false }
-            const originalDestroy = conn['_connector'].destroy.bind(conn['_connector'])
-            conn['_connector'].destroy = () => {
-                destroySpy.called = true
-                return originalDestroy()
+            const rows: number[] = []
+            for await (const row of pool.stream<{ n: number }>`SELECT generate_series(1, 5) as n`) {
+                rows.push(row.n)
             }
 
-            assert.strictEqual(destroySpy.called, false)
-
-            await Promise.all([q1, q2])
-            await closePromise
-
-            assert.strictEqual(destroySpy.called, true)
-            
-            pool.release(conn)
+            assert.deepStrictEqual(rows, [1, 2, 3, 4, 5])
         })
 
-        it("should not attempt to reconnect after the connection has been closed", async () => {
-            const conn = await pool.acquire()
-            await conn.close()
-            
-
-            let reconnectCalled = false
-
-            conn['_performReconnect'] = () => {
-                reconnectCalled = true
-                return Ok()
+        it("should stream when there are no idle connections yet", async () => {
+            const rows: number[] = []
+            for await (const row of pool.stream<{ n: number }>`SELECT generate_series(1, 3) as n`) {
+                rows.push(row.n)
             }
 
-            conn['_connector'].destroy()
-
-            await new Promise(r => setTimeout(r, 50))
-            assert.strictEqual(reconnectCalled, false)
-            
-            pool.release(conn)
+            assert.deepStrictEqual(rows, [1, 2, 3])
         })
 
-        it("should not close before the follow-up query queued right after Parse resolves (parse/bind race window)", async () => {
+        it("should stream on a fresh connection after an idle one dropped", async () => {
             const conn = await pool.acquire()
-
-            const pending = conn.query`SELECT pg_sleep(0.05)::text, 12345 as value -- race-${sql.literal(Date.now().toString())}-${sql.literal(Math.random().toString())}`
-
-            const closePromise = conn.close()
-
-            assert.ok(conn.isClosed)
-            assert.ok(!conn.isOpened)
-
-            const result = await pending
-            assert.strictEqual(result[0].value, 12345)
-
-            await closePromise
-            assert.ok(conn.isClosed)
-
             pool.release(conn)
+
+            conn['_connector']!.close()
+            await new Promise(r => setTimeout(r, 100))
+
+            const rows: number[] = []
+            for await (const row of pool.stream<{ n: number }>`SELECT generate_series(1, 2) as n`) {
+                rows.push(row.n)
+            }
+
+            assert.deepStrictEqual(rows, [1, 2])
         })
     })
 })

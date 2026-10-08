@@ -3,3 +3,4 @@ export * from "./error"
 export * from "./connection"
 export * from "./pool"
 export * from './types'
+export * from './listener'

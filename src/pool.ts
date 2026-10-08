@@ -23,8 +23,10 @@ export class Pool {
     private _isOpened = true
 
     constructor(config: PoolPartialConfig) {
-        const conf: PoolConfig =  {...config, max: config.max || 20}
-        this.config = conf
+        this.config =  {
+            ...config, 
+            max: config.max ?? 20
+        }
         this._available = new RingQueue(this.config.max)
     }
 
@@ -39,7 +41,7 @@ export class Pool {
         while (this._available.hasMore) {
             const conn = this._available.shift
 
-            if (conn.isOpened) {
+            if (conn.isOpened && conn.isConnected) {
                 return Ok(conn)
             }
             this._total--
@@ -47,7 +49,10 @@ export class Pool {
 
         if (this._total < this.config.max) {
             this._total++
-            return Connection.new(this.config)
+            const conn = new Connection(this.config)
+
+            return conn.connect()
+                .map(() => conn)
                 .tapErr(() => this._total--)
             
         }
@@ -80,11 +85,21 @@ export class Pool {
     release(conn: Connection) {
         if (!this._isOpened) {
             void conn.close()
-            throw ErrPoolClosed
+            return
         }
 
-        if (!conn.isOpened) {
+        if (conn.isClosed || !conn.isConnected) {
             this._total--
+
+            if (this._waiting.hasMore) {
+                const waiter = this._waiting.shift
+
+                this.acquire()
+                    .tap(c => waiter.resolve(c))
+                    .tapErr(err => waiter.reject(err))
+                    .recover()
+            }
+
             return
         }
 
@@ -127,7 +142,7 @@ export class Pool {
         while (this._available.hasMore) {
             const conn = this._available.shift
 
-            if (!conn.isOpened) {
+            if (conn.isClosed || !conn.isConnected) {
                 this._total--
                 continue
             }
@@ -138,8 +153,8 @@ export class Pool {
 
         return this.acquire()
             .andThen(conn => {
-                this.release(conn) 
                 return conn.query<T>(templates, ...args)
+                    .finally(() => this.release(conn))
             })
     }
 
@@ -151,7 +166,7 @@ export class Pool {
         while (this._available.hasMore) {
             const conn = this._available.shift
 
-            if (conn.isClosed) {
+            if (conn.isClosed || !conn.isConnected) {
                 this._total--
                 continue
             }
@@ -162,8 +177,8 @@ export class Pool {
 
         return this.acquire()
             .andThen(conn => {
-                this.release(conn)
                 return conn.execute(templates, ...params)
+                    .finally(() => this.release(conn))
             })
     }
 
@@ -180,7 +195,7 @@ export class Pool {
         while (this._available.hasMore) {
             const conn = this._available.shift
 
-            if (!conn.isOpened) {
+            if (conn.isClosed || !conn.isConnected) {
                 this._total--
                 continue
             }
@@ -199,10 +214,8 @@ export class Pool {
 
         this.acquire()
             .tap(conn => {
+                conn['_streamWithController']<T>(templates, params, controller)
                 this.release(conn) 
-                const {text, args} = compileSqlTemplate(templates, params)
-                
-                conn['_performStream']<T>(text, args, controller)
             })
             .catch(err => {
                 controller.error(err)
@@ -211,34 +224,6 @@ export class Pool {
         return stream
     }
 
-
-    /** Sends a `pg_notify` message on `channelName` (payload ≤ 8000 bytes). */
-    notify(channelName: string, payload: string = "") {
-        return this.acquire()
-            .andThen(conn => conn.notify(channelName, payload)    
-                .finally(() => this.release(conn))
-            )
-    }
-
-
-    /**
-     * Subscribes `callback` to `channel` on a dedicated connection.
-     * Returns an unsubscribe function that issues `UNLISTEN` and releases the connection.
-     *
-     * @example
-     * const unlisten = await pool.listen('order_created', payload => console.log(payload))
-     * await unlisten()
-     */
-    listen(channel: string, callback: (payload: string) => void) {
-        return this.acquire()
-            .andThen(conn => 
-                conn.listen(channel, callback)
-                    .map(() => () => 
-                        conn.unlisten(channel, callback)
-                            .tap(() => this.release(conn))
-                    )
-            )
-    }
 
 
     /** Number of idle connections. */

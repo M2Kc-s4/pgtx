@@ -64,6 +64,7 @@ const server = createServer(async (req, res) => {
         res.end(JSON.stringify({ error: 'Timeout' }))
         return
       }
+
   
       if (user[0].id !== targetId) {
         res.writeHead(500, { 'Content-Type': 'application/json' })
