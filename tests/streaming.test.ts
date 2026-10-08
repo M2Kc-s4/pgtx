@@ -59,8 +59,7 @@ describe('Streaming test', () => {
         const invalidStream = pool.stream`SELECT * FROM non_existent_table_abc;`
 
         try {
-            for await (const _ of invalidStream) {
-            }
+            for await (const _ of invalidStream) {}
             assert.fail()
         } catch (error: any) {
             assert.strictEqual(error.severity, 'ERROR')
@@ -76,8 +75,7 @@ describe('Streaming test', () => {
         const startTime = Date.now()
 
         try {
-            for await (const _ of timeoutStream) {
-            }
+            for await (const _ of timeoutStream) {}
             assert.fail()
         } catch (error: any) {
             const duration = Date.now() - startTime

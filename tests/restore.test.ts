@@ -234,7 +234,10 @@ describe("Connection reconnect and close test", async () => {
 
             let reconnectCalled = false
 
-            conn['_performReconnect'] = () => {reconnectCalled = true; return Ok()}
+            conn['_performReconnect'] = () => {
+                reconnectCalled = true
+                return Ok()
+            }
 
             conn['_connector'].destroy()
 
