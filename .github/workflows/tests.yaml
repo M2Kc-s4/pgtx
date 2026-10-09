@@ -1,5 +1,13 @@
-# Вставь этот job в `jobs:` рядом с `test` и `benchmark`.
-  profile:
+name: Tests
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+
+jobs:
+  test:
     runs-on: ubuntu-latest
 
     services:
@@ -17,13 +25,47 @@
           --health-timeout 5s
           --health-retries 5
 
-    env:
-      PGHOST: localhost
-      PGPORT: 5433
-      PGUSER: postgres
-      PGPASSWORD: postgres
-      PGDATABASE: pgtx_test
-      PGMAX: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Build
+        run: npm run build
+
+      - name: Run tests
+        run: npm run testGitHub
+        env:
+          PGHOST: localhost
+          PGPORT: 5433
+          PGUSER: postgres
+          PGPASSWORD: postgres
+          PGDATABASE: pgtx_test
+
+  benchmark:
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:latest
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: pgtx_test
+        ports:
+          - 5433:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
 
     steps:
       - uses: actions/checkout@v4
@@ -40,107 +82,230 @@
       - name: Build
         run: npm run build
 
-      - name: Install wrk and psql
-        run: sudo apt-get install -y wrk postgresql-client
+      - name: Install wrk 
+        run: |
+          sudo apt install wrk
 
       - name: Seed database for wrk
         run: |
-          psql -h localhost -p 5433 -U postgres -d pgtx_test -c "
+          sudo apt-get install -y postgresql-client
+          PGPASSWORD=postgres psql -h localhost -p 5433 -U postgres -d pgtx_test -c "
             DROP TABLE IF EXISTS bench_users;
             CREATE TABLE bench_users (id SERIAL PRIMARY KEY, name TEXT, balance INT);
-            INSERT INTO bench_users (name, balance)
+            INSERT INTO bench_users (name, balance) 
             SELECT 'User ' || i, floor(random() * 1000) FROM generate_series(1, 1000) s(i);
           "
 
-      - name: Write profiling helpers
+      - name: Run wrk HTTP benchmark
+        env:
+          PGHOST: localhost
+          PGPORT: 5433
+          PGUSER: postgres
+          PGPASSWORD: postgres
+          PGDATABASE: pgtx_test
+          PGMAX: 10
         run: |
-          mkdir -p prof
 
-          # node пишет .cpuprofile только при нормальном выходе, а на SIGTERM по умолчанию
-          # умирает молча (и kill -9 тоже теряет профиль). Этот прелоад делает выход чистым.
-          cat > prof/preload.mjs <<'EOF'
-          const quit = () => process.exit(0)
-          process.on('SIGTERM', quit)
-          process.on('SIGINT', quit)
-          EOF
+          npx tsx server-postgresjs.ts &
+          POSTGRES_PID=$!
+          
+          npx tsx server-pgtx.ts &
+          PGTX_PID=$!
+          
+          sleep 3
 
-          # Печатает топ функций по self-time и топ файлов
-          cat > prof/top.mjs <<'EOF'
-          import { readFileSync } from 'node:fs'
+          echo "=========================================="
+          echo "  TEST PAIR 1: Selecting 5 users"
+          echo "=========================================="
+          
+          echo "Selecting 5 users Postgres.js (10000 conns)"
+          wrk -t2 -c10000 -d10s --latency http://localhost:3001/users 
+          
+          echo ""
+          echo "------------------------------------------"
+          echo ""
+          sleep 5
+          
+          echo "Selecting 5 users @m2k-5f/pgtx (10000 conns)"
+          wrk -t2 -c10000 -d10s --latency http://localhost:3000/users 
+          sleep 5
 
-          const file = process.argv[2]
-          const p = JSON.parse(readFileSync(file, 'utf8'))
-          const byId = new Map(p.nodes.map(n => [n.id, n]))
+          echo "=========================================="
+          echo "  TEST PAIR 2: Selecting 5 users (1000 conns)"
+          echo "=========================================="
+          
+          echo "Selecting 5 users Postgres.js (1000 conns)"
+          wrk -t2 -c1000 -d10s --latency http://localhost:3001/users
 
-          const byFn = new Map()
-          const byFile = new Map()
-          let total = 0
+          echo ""
+          echo "------------------------------------------"
+          echo ""
+          sleep 5
 
-          p.samples.forEach((id, i) => {
-            const dt = p.timeDeltas[i] ?? 0
-            const cf = byId.get(id).callFrame
-            const where = cf.url ? cf.url.replace(/^.*\/(node_modules|src|dist|node:)/, '$1') : '(native)'
-            const fn = `${cf.functionName || '(anonymous)'}  ${where}:${cf.lineNumber + 1}`
-            byFn.set(fn, (byFn.get(fn) ?? 0) + dt)
-            byFile.set(where, (byFile.get(where) ?? 0) + dt)
-            total += dt
-          })
+          echo "Selecting 5 users @m2k-5f/pgtx (1000 conns)"
+          wrk -t2 -c1000 -d10s --latency http://localhost:3000/users
+          sleep 5
 
-          const show = (title, map, n) => {
-            console.log(`\n--- ${title} ---`)
-            for (const [k, v] of [...map].sort((a, b) => b[1] - a[1]).slice(0, n)) {
-              console.log(`${(v / 1000).toFixed(0).padStart(7)} ms  ${(v / total * 100).toFixed(1).padStart(5)}%  ${k}`)
-            }
-          }
+          echo "=========================================="
+          echo "  TEST PAIR 3: Selecting 5 users (200 conns)"
+          echo "=========================================="
+          
+          echo "Selecting 5 users Postgres.js (200 conns)"
+          wrk -t2 -c200 -d10s --latency http://localhost:3001/users
+          
+          echo ""
+          echo "------------------------------------------"
+          echo ""
+          sleep 5
+          
+          echo "Selecting 5 users @m2k-5f/pgtx (200 conns)"
+          wrk -t2 -c200 -d10s --latency http://localhost:3000/users
+          sleep 5
 
-          console.log(`\n===== ${file}: ${(total / 1000).toFixed(0)} ms sampled =====`)
-          show('top functions by self time', byFn, 30)
-          show('top files by self time', byFile, 12)
-          EOF
+          echo "=========================================="
+          echo "  TEST PAIR 4: Selecting 5 users (50 conns)"
+          echo "=========================================="
+          
+          echo "Selecting 5 users Postgres.js (50 conns)"
+          wrk -t2 -c50 -d10s --latency http://localhost:3001/users
+          
+          echo ""
+          echo "------------------------------------------"
+          echo ""
+          sleep 5
+          
+          echo "Selecting 5 users @m2k-5f/pgtx (50 conns)"
+          wrk -t2 -c50 -d10s --latency http://localhost:3000/users
+          sleep 5
 
-      - name: Profile pgtx server under wrk
-        run: |
-          profile() {
-            local name=$1 conns=$2 path=$3
+          echo "=========================================="
+          echo "  TEST PAIR 5: Selecting 1 user (10000 conns)"
+          echo "=========================================="
+          
+          echo "Selecting 1 user Postgres.js (10000 conns)"
+          wrk -t2 -c10000 -d10s --latency http://localhost:3001/user
+          
+          echo ""
+          echo "------------------------------------------"
+          echo ""
+          sleep 5
+          
+          echo "Selecting 1 user @m2k-5f/pgtx (10000 conns)"
+          wrk -t2 -c10000 -d10s --latency http://localhost:3000/user
+          sleep 5
 
-            echo "=========================================="
-            echo "  PROFILE: $name ($conns conns, $path)"
-            echo "=========================================="
+          echo "=========================================="
+          echo "  TEST PAIR 6: Selecting 1 user (1000 conns)"
+          echo "=========================================="
+          
+          echo "Selecting 1 user Postgres.js (1000 conns)"
+          wrk -t2 -c1000 -d10s --latency http://localhost:3001/user
+          
+          echo ""
+          echo "------------------------------------------"
+          echo ""
+          sleep 5
+          
+          echo "Selecting 1 user @m2k-5f/pgtx (1000 conns)"
+          wrk -t2 -c1000 -d10s --latency http://localhost:3000/user
+          sleep 5
 
-            node --cpu-prof --cpu-prof-dir=prof --cpu-prof-name="pgtx-$name.cpuprofile" \
-                 --import ./prof/preload.mjs --import tsx server-pgtx.ts \
-                 > "prof/server-$name.log" 2>&1 &
-            local pid=$!
-            sleep 3
+          echo "=========================================="
+          echo "  TEST PAIR 7: Selecting 1 user (200 conns)"
+          echo "=========================================="
+          
+          echo "Selecting 1 user Postgres.js (200 conns)"
+          wrk -t2 -c200 -d10s --latency http://localhost:3001/user
+          
+          echo ""
+          echo "------------------------------------------"
+          echo ""
+          sleep 5
+          
+          echo "Selecting 1 user @m2k-5f/pgtx (200 conns)"
+          wrk -t2 -c200 -d10s --latency http://localhost:3000/user
+          sleep 5
 
-            # короткий прогрев, чтобы холодный старт не забил профиль
-            timeout 20 wrk -t2 -c50 -d3s http://localhost:3000$path > /dev/null || true
+          echo "=========================================="
+          echo "  TEST PAIR 8: Selecting 1 user (50 conns)"
+          echo "=========================================="
+          
+          echo "Selecting 1 user Postgres.js (50 conns)"
+          wrk -t2 -c50 -d10s --latency http://localhost:3001/user
+          
+          echo ""
+          echo "------------------------------------------"
+          echo ""
+          sleep 5
+          
+          echo "Selecting 1 user @m2k-5f/pgtx (50 conns)"
+          wrk -t2 -c50 -d10s --latency http://localhost:3000/user
+          sleep 5
 
-            timeout 40 wrk -t2 -c$conns -d10s --latency http://localhost:3000$path
-            echo "wrk exit code: $?"
+          echo "=========================================="
+          echo "  TEST PAIR 9: Selecting 1 as res (10000 conns)"
+          echo "=========================================="
+          
+          echo "Selecting 1 as res Postgres.js (10000 conns)"
+          wrk -t2 -c10000 -d10s --latency http://localhost:3001/simple
+          
+          echo ""
+          echo "------------------------------------------"
+          echo ""
+          sleep 5
+          
+          echo "Selecting 1 as res @m2k-5f/pgtx (10000 conns)"
+          wrk -t2 -c10000 -d10s --latency http://localhost:3000/simple
+          sleep 5
 
-            # жив ли сервер и отвечает ли после нагрузки (диагностика пустого вывода на 200 conns)
-            if kill -0 $pid 2>/dev/null; then echo "server process: alive"; else echo "server process: DEAD"; fi
-            curl -s -m 5 -o /dev/null -w "post-wrk request: HTTP %{http_code} in %{time_total}s\n" \
-              http://localhost:3000$path || echo "post-wrk request: no response (hang?)"
+          echo "=========================================="
+          echo "  TEST PAIR 10: Selecting 1 as res (1000 conns)"
+          echo "=========================================="
+          
+          echo "Selecting 1 as res Postgres.js (1000 conns)"
+          wrk -t2 -c1000 -d10s --latency http://localhost:3001/simple
+          
+          echo ""
+          echo "------------------------------------------"
+          echo ""
+          sleep 5
+          
+          echo "Selecting 1 as res @m2k-5f/pgtx (1000 conns)"
+          wrk -t2 -c1000 -d10s --latency http://localhost:3000/simple
+          sleep 5
 
-            kill -TERM $pid 2>/dev/null || true
-            wait $pid 2>/dev/null || true
+          echo "=========================================="
+          echo "  TEST PAIR 11: Selecting 1 as res (200 conns)"
+          echo "=========================================="
+          
+          echo "Selecting 1 as res Postgres.js (200 conns)"
+          wrk -t2 -c200 -d10s --latency http://localhost:3001/simple
+          
+          echo ""
+          echo "------------------------------------------"
+          echo ""
+          sleep 5
+          
+          echo "Selecting 1 as res @m2k-5f/pgtx (200 conns)"
+          wrk -t2 -c200 -d10s --latency http://localhost:3000/simple
+          sleep 5
 
-            echo "--- server log ---"
-            tail -n 40 "prof/server-$name.log"
+          echo "=========================================="
+          echo "  TEST PAIR 12: Selecting 1 as res (50 conns)"
+          echo "=========================================="
+          
+          echo "Selecting 1 as res Postgres.js (50 conns)"
+          wrk -t2 -c50 -d10s --latency http://localhost:3001/simple
+          
+          echo ""
+          echo "------------------------------------------"
+          echo ""
+          sleep 5
+          
+          echo "Selecting 1 as res @m2k-5f/pgtx (50 conns)"
+          wrk -t2 -c50 -d10s --latency http://localhost:3000/simple
+          sleep 5
 
-            node prof/top.mjs "prof/pgtx-$name.cpuprofile" || echo "no profile written for $name"
-            sleep 3
-          }
-
-          profile c10000-users 10000 /users
-          profile c200-users   200   /users
-          profile c10000-user  10000 /user
-
-      - name: Upload cpuprofiles
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: pgtx-cpuprofiles
-          path: prof/*.cpuprofile
+          # Cleanup
+          kill -9 $POSTGRES_PID 2>/dev/null || true
+          kill -9 $PGTX_PID 2>/dev/null || true
