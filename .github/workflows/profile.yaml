@@ -103,33 +103,54 @@ jobs:
           console.log(`\n===== ${file}: ${(total / 1000).toFixed(0)} ms sampled =====`)
           show('top functions by self time', byFn, 30)
           show('top files by self time', byFile, 12)
+
+          const parent = new Map()
+          for (const n of p.nodes) for (const c of n.children ?? []) parent.set(c, n.id)
+          const chain = id => {
+            const out = []
+            for (let cur = parent.get(id); cur !== undefined && out.length < 6; cur = parent.get(cur)) {
+              const cf = byId.get(cur).callFrame
+              if (cf.functionName === '(root)') break
+              out.push((cf.functionName || '(anonymous)') + '@' + (cf.url.split('/').pop() || 'native'))
+            }
+            return out.join(' < ')
+          }
+          const callers = new Map()
+          p.samples.forEach((id, i) => {
+            const name = byId.get(id).callFrame.functionName
+            if (name === 'writev' || name === '(garbage collector)') {
+              const key = `${name}  <  ${chain(id)}`
+              callers.set(key, (callers.get(key) ?? 0) + (p.timeDeltas[i] ?? 0))
+            }
+          })
+          show('who calls writev / GC', callers, 10)
           EOF
 
-      - name: Profile pgtx server under wrk
+      - name: Profile servers under wrk
         run: |
           profile() {
-            local name=$1 conns=$2 path=$3
+            local name=$1 conns=$2 path=$3 server=${4:-server-pgtx.ts} port=${5:-3000}
 
             echo "=========================================="
             echo "  PROFILE: $name ($conns conns, $path)"
             echo "=========================================="
 
-            node --cpu-prof --cpu-prof-dir=prof --cpu-prof-name="pgtx-$name.cpuprofile" \
-                 --import ./prof/preload.mjs --import tsx server-pgtx.ts \
+            node --cpu-prof --cpu-prof-dir=prof --cpu-prof-name="$name.cpuprofile" \
+                 --import ./prof/preload.mjs --import tsx "$server" \
                  > "prof/server-$name.log" 2>&1 &
             local pid=$!
             sleep 3
 
             # короткий прогрев, чтобы холодный старт не забил профиль
-            timeout 20 wrk -t2 -c50 -d3s http://localhost:3000$path > /dev/null || true
+            timeout 20 wrk -t2 -c50 -d3s http://localhost:$port$path > /dev/null || true
 
-            timeout 40 wrk -t2 -c$conns -d10s --latency http://localhost:3000$path
+            timeout 40 wrk -t2 -c$conns -d10s --latency http://localhost:$port$path
             echo "wrk exit code: $?"
 
             # жив ли сервер и отвечает ли после нагрузки (диагностика пустого вывода на 200 conns)
             if kill -0 $pid 2>/dev/null; then echo "server process: alive"; else echo "server process: DEAD"; fi
             curl -s -m 5 -o /dev/null -w "post-wrk request: HTTP %{http_code} in %{time_total}s\n" \
-              http://localhost:3000$path || echo "post-wrk request: no response (hang?)"
+              http://localhost:$port$path || echo "post-wrk request: no response (hang?)"
 
             kill -TERM $pid 2>/dev/null || true
             wait $pid 2>/dev/null || true
@@ -137,17 +158,18 @@ jobs:
             echo "--- server log ---"
             tail -n 40 "prof/server-$name.log"
 
-            node prof/top.mjs "prof/pgtx-$name.cpuprofile" || echo "no profile written for $name"
+            node prof/top.mjs "prof/$name.cpuprofile" || echo "no profile written for $name"
             sleep 3
           }
 
-          profile c10000-users 10000 /users
-          profile c200-users   200   /users
-          profile c10000-user  10000 /user
+          profile pgtx-c10000-users 10000 /users server-pgtx.ts       3000
+          profile pgjs-c10000-users 10000 /users server-postgresjs.ts 3001
+          profile pgtx-c200-users   200   /users server-pgtx.ts       3000
+          profile pgtx-c10000-user  10000 /user  server-pgtx.ts       3000
 
       - name: Upload cpuprofiles
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: pgtx-cpuprofiles
+          name: cpuprofiles
           path: prof/*.cpuprofile
