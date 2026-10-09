@@ -158,8 +158,8 @@ export class Pool {
 
         return this.acquire()
             .andThen(conn => {
+                this.release(conn) 
                 return conn.query<T>(templates, ...args)
-                    .finally(() => this.release(conn))
             })
     }
 
@@ -182,8 +182,8 @@ export class Pool {
 
         return this.acquire()
             .andThen(conn => {
+                this.release(conn) 
                 return conn.execute(templates, ...params)
-                    .finally(() => this.release(conn))
             })
     }
 
