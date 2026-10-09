@@ -18,6 +18,7 @@ import { sql, Pool } from "@m2k-5f/pgtx"
 
 const pool = new Pool({
   host: 'localhost',
+  port: 5432,
   user: 'postgres',
   password: 'postgres',
   database: 'myapp'
@@ -174,6 +175,57 @@ const { user, posts, ...data } = await Bind({
 Errors don't leak across a batch, either. If one query in a pipelined group fails — a bad column, a constraint violation — only its own `Future` rejects; the others in the same batch still resolve normally with their own rows. Nothing gets rolled back or aborted on their account, because nothing tied them together in the first place beyond sharing a socket.
 
 
+
+## Connections and lifecycle
+
+A `Connection` is one PostgreSQL session over one socket, and it is deliberately dumb: it is single-use and never reconnects.
+
+```typescript
+const conn = await Connection.connect({
+  host: 'localhost', port: 5432, user: 'postgres', password: 'postgres', database: 'myapp'
+})
+
+const users = await conn.query`SELECT * FROM users`
+await conn.close()
+```
+
+If the socket drops, in-flight queries reject with `ErrSocketFailed`, new ones with `ErrConnectionClosed`, and the object stays dead. Open a new connection instead. Everything the old session owned (statement cache, open transactions, `LISTEN` subscriptions, `SET`, temp tables, advisory locks) is gone with it.
+
+Reconnect policy lives in the wrappers: `Pool` throws dead connections away and opens fresh ones lazily, `Listener` reconnects and resubscribes.
+
+`close()` stops accepting queries, lets the ones already sent finish, then closes the socket. If a query hangs on the server, `close()` waits for it.
+
+### Events
+
+```typescript
+conn.on('error', err => metrics.inc('pg_errors'))
+conn.on('notice', notice => logger.warn(notice))
+conn.on('close', () => metrics.inc('pg_closed'))
+```
+
+| Event | Fires |
+|---|---|
+| `error` | on query errors and on an unexpected socket drop (`ErrSocketFailed`); not on a deliberate `close()` |
+| `notice` | on server notices |
+| `query` | after each query completes |
+| `notify` | on `NOTIFY`, with `(channel, payload)` |
+| `close` | once, when the connection ends for any reason |
+
+`conn.off(event, handler)` removes a handler. Handlers are dropped when the connection closes. `logLevel` (`'none' | 'error' | 'notice' | 'query'`) controls the built-in logger independently of them; set it to `'none'` if you only want your own handling.
+
+To put the same handlers on every connection of a pool, pass `defaultHandlers`:
+
+```typescript
+const pool = new Pool({
+  ...config,
+  logLevel: 'none',
+  defaultHandlers: {
+    error: err => metrics.inc('pg_errors'),
+    close: () => metrics.inc('pg_closed'),
+  },
+})
+```
+
 ## Extra bits
 
 ### Transactions and nested calls
@@ -226,20 +278,33 @@ fetch(req) {
 
 ---
 
-### LISTEN / NOTIFY without babysitting a connection
+### LISTEN / NOTIFY
+
+Sending is just a query:
 
 ```typescript
-await pool.notify('user_events', JSON.stringify({ id: 42, action: 'signup' }))
-
-const unlisten = await pool.listen('user_events', payload => {
-  console.log('got:', payload)
-})
-
-// later
-await unlisten() // sends UNLISTEN, hands the connection back
+await pool.execute`SELECT pg_notify(${'user_events'}, ${JSON.stringify({ id: 42 })})`
 ```
 
-`pool.listen` borrows a dedicated connection and manages its lifecycle for you. If you need to multiplex several callbacks onto one channel on a connection you're pinning yourself, drop down to `conn.listen`/`conn.unlisten` directly — just don't release that connection back to the pool while you're still using it for that.
+Receiving goes through `Listener`, a small wrapper that keeps one connection alive: when it dies, it opens a new one with backoff and re-issues `LISTEN` for every channel.
+
+```typescript
+import { Listener } from "@m2k-5f/pgtx"
+
+const listener = new Listener({ host: 'localhost', port: 5432, user: 'postgres', password: 'postgres', database: 'myapp' })
+
+const onEvent = (payload: string) => console.log('got:', payload)
+
+await listener.listen('user_events', onEvent)   // several handlers per channel are fine
+
+await listener.unlisten('user_events', onEvent) // just this handler; UNLISTEN once none are left
+await listener.unlisten('user_events')          // or drop the channel entirely
+await listener.close()
+```
+
+Notifications sent while the connection is down are lost; that's how PostgreSQL works. If you can't afford gaps, keep the source of truth in a table and treat `NOTIFY` as a hint to go look.
+
+Don't use `Pool` for `LISTEN`: a subscription lives on one specific connection, and pooled connections are shared and replaced when they die.
 
 ---
 
@@ -282,86 +347,6 @@ await pool.query`SELECT * FROM ${sql.ident(tableName)}`
 
 Everything that goes through a tagged template is bound as `$1, $2, ...`. There's no code path where a template value becomes raw SQL text — if you need a dynamic identifier or literal, `sql.ident`/`sql.literal` exist precisely so you're never tempted to interpolate by hand.
 
-## API
-
-### `Connection`
-
-```typescript
-class Connection {
-  static new(config: ConnectionPartialConfig): Future<Connection, PostgresError>
-
-  query<T>(strings: TemplateStringsArray, ...values: any[]): Future<T[], PostgresError>
-  execute(strings: TemplateStringsArray, ...values: any[]): Future<void, PostgresError>
-  stream<T>(strings: TemplateStringsArray, ...values: any[]): ReadableStream<T>
-  begin<T>(callback: (db: Connection) => Promise<T>): Future<T, unknown>
-  notify(channelName: string, payload?: string): Future<void, PostgresError>
-  listen(channelName: string, callback: (payload: string) => void): Future<void, PostgresError>
-  unlisten(channelName: string, callback: (payload: string) => void): Future<void, PostgresError>
-  close(): Future<void, PostgresError>
-
-  get isOpened(): boolean
-  get isClosed(): boolean
-}
-
-interface ConnectionPartialConfig {
-  user: string
-  password?: string
-  host: string
-  port: number
-  database: string
-  logLevel?: 'error' | 'notice' | 'query' | "none"   // default 'error'
-  int8toBigint?: boolean                     // default false
-  queryTimeout?: number                      // default 30000 (ms)
-  syncSсhedule?: 'beforeMicrotask' | 'afterMicrotask' | 'Immediate'  // default 'Immediate'
-  ssl?: 'disable' | 'prefer' | 'require' // defaut 'prefer' 
-  caPath?: string // forces `ssl` to 'require' if provided
-}
-```
-
-### `Pool`
-
-```typescript
-class Pool {
-  constructor(config: PoolPartialConfig)
-
-  query<T>(strings: TemplateStringsArray, ...values: any[]): Future<T[], PostgresError>
-  execute(strings: TemplateStringsArray, ...values: any[]): Future<void, PostgresError>
-  stream<T>(strings: TemplateStringsArray, ...values: any[]): ReadableStream<T>
-  begin<T>(callback: (db: Connection) => Promise<T>): Future<T, unknown>
-  notify(channelName: string, payload?: string): Future<void, PostgresError>
-  listen(channel: string, callback: (payload: string) => void): Future<() => Future<void, PostgresError>, PostgresError>
-  withAcquire<T>(fn: (conn: Connection) => Promise<T>): Future<T, unknown>
-  acquire(): Future<Connection, PostgresError>
-  release(conn: Connection): void
-  close(): Future<void, PostgresError>
-
-  get size(): number
-  get total(): number
-  get isOpened(): boolean
-  get isClosed(): boolean
-}
-
-interface PoolPartialConfig extends ConnectionPartialConfig {
-  max?: number  // default 20
-}
-```
-
-
-### `sql`
-
-```typescript
-const sql: {
-  ident<T extends string>(name: T): IdentifierClause<T>
-  literal<T extends string>(value: T): LiteralClause<T>
-  fragment(strings: TemplateStringsArray, ...values: any[]): FragmentClause
-  insert<T extends Record<string, any>>(...objects: T[]): InsertClause<T>
-  update<T extends Record<string, any>>(object: T): UpdateClause<T>
-  where<T extends Record<string, any>>(map: T): WhereClause<T>
-  excluded(fields: string[]): ExcludeUpdateClause
-  array(values: any[], separator?: string): ArrayClause
-  empty: EmptyClause
-}
-```
 
 ## What this isn't
 

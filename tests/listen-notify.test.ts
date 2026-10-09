@@ -26,8 +26,7 @@ describe("Listener", () => {
     }
 
     before(async () => {
-        notifier = new Connection(config)
-        await notifier.connect()
+        notifier = await Connection.connect(config)
     })
 
     afterEach(async () => {
@@ -42,12 +41,12 @@ describe("Listener", () => {
     describe("Subscriptions", () => {
         it("should connect lazily on the first listen() and deliver notifications", async () => {
             const listener = make()
-            assert.ok(!listener.isConnected)
+            assert.strictEqual(listener['_connection'], null)
 
             const received: string[] = []
             await listener.listen("ls_basic", p => { received.push(p) })
 
-            assert.ok(listener.isConnected)
+            assert.ok(listener['_connection']!.isOpened)
 
             await notifier.query`SELECT pg_notify(${"ls_basic"}, ${"hello"})`
             await sleep(100)
@@ -70,15 +69,19 @@ describe("Listener", () => {
             assert.deepStrictEqual([a, b], [["1"], ["2"]])
         })
 
-        it("should handle concurrent listen() calls before the connection is ready", async () => {
+        it("should share one connection between concurrent listen() calls", async () => {
             const listener = make()
             const a: string[] = []
             const b: string[] = []
 
-            await Promise.all([
-                listener.listen("ls_c1", p => { a.push(p) }),
-                listener.listen("ls_c2", p => { b.push(p) }),
-            ])
+            const first = listener.listen("ls_c1", p => { a.push(p) })
+            const connecting = listener['_connecting']
+            const second = listener.listen("ls_c2", p => { b.push(p) })
+
+            assert.ok(connecting)
+            assert.strictEqual(listener['_connecting'], connecting)
+
+            await Promise.all([first, second])
 
             await notifier.query`SELECT pg_notify(${"ls_c1"}, ${"x"})`
             await notifier.query`SELECT pg_notify(${"ls_c2"}, ${"y"})`
@@ -87,36 +90,80 @@ describe("Listener", () => {
             assert.deepStrictEqual([a, b], [["x"], ["y"]])
         })
 
-        it("should replace the handler when listening to the same channel again", async () => {
+        it("should call every handler registered on the same channel", async () => {
             const listener = make()
             const first: string[] = []
             const second: string[] = []
 
-            await listener.listen("ls_replace", p => { first.push(p) })
-            await listener.listen("ls_replace", p => { second.push(p) })
+            await listener.listen("ls_multi", p => { first.push(p) })
+            await listener.listen("ls_multi", p => { second.push(p) })
 
-            await notifier.query`SELECT pg_notify(${"ls_replace"}, ${"v"})`
+            await notifier.query`SELECT pg_notify(${"ls_multi"}, ${"v"})`
             await sleep(100)
 
-            assert.strictEqual(first.length, 0)
+            assert.deepStrictEqual(first, ["v"])
             assert.deepStrictEqual(second, ["v"])
         })
 
-        it("should stop delivering after unlisten()", async () => {
+        it("should not call the same handler twice when it is registered twice", async () => {
             const listener = make()
             const received: string[] = []
+            const handler = (p: string) => { received.push(p) }
 
-            await listener.listen("ls_unlisten", p => { received.push(p) })
+            await listener.listen("ls_dup", handler)
+            await listener.listen("ls_dup", handler)
+
+            await notifier.query`SELECT pg_notify(${"ls_dup"}, ${"once"})`
+            await sleep(100)
+
+            assert.deepStrictEqual(received, ["once"])
+        })
+
+        it("should remove only the given handler and keep listening for the rest", async () => {
+            const listener = make()
+            const a: string[] = []
+            const b: string[] = []
+            const handlerA = (p: string) => { a.push(p) }
+            const handlerB = (p: string) => { b.push(p) }
+
+            await listener.listen("ls_partial", handlerA)
+            await listener.listen("ls_partial", handlerB)
+
+            await listener.unlisten("ls_partial", handlerA)
+
+            await notifier.query`SELECT pg_notify(${"ls_partial"}, ${"v"})`
+            await sleep(100)
+
+            assert.deepStrictEqual(a, [])
+            assert.deepStrictEqual(b, ["v"])
+
+            // the last handler is gone: the channel is UNLISTENed
+            await listener.unlisten("ls_partial", handlerB)
+            assert.ok(!listener['_handlers'].has("ls_partial"))
+
+            await notifier.query`SELECT pg_notify(${"ls_partial"}, ${"after"})`
+            await sleep(100)
+
+            assert.deepStrictEqual(b, ["v"])
+        })
+
+        it("should stop delivering to every handler after unlisten() without a handler", async () => {
+            const listener = make()
+            const a: string[] = []
+            const b: string[] = []
+
+            await listener.listen("ls_unlisten", p => { a.push(p) })
+            await listener.listen("ls_unlisten", p => { b.push(p) })
 
             await notifier.query`SELECT pg_notify(${"ls_unlisten"}, ${"before"})`
             await sleep(100)
-            assert.deepStrictEqual(received, ["before"])
+            assert.deepStrictEqual([a, b], [["before"], ["before"]])
 
             await listener.unlisten("ls_unlisten")
 
             await notifier.query`SELECT pg_notify(${"ls_unlisten"}, ${"after"})`
             await sleep(100)
-            assert.deepStrictEqual(received, ["before"])
+            assert.deepStrictEqual([a, b], [["before"], ["before"]])
         })
 
         it("should not fail on unlisten() of an unknown channel", async () => {
@@ -135,13 +182,15 @@ describe("Listener", () => {
             await listener.listen("ls_re_a", p => { a.push(p) })
             await listener.listen("ls_re_b", p => { b.push(p) })
 
-            listener['_conn']['_connector']!.close()
+            const old = listener['_connection']!
+            old['_connector'].close()
             await sleep(100)
-            assert.ok(!listener.isConnected)
+            assert.strictEqual(listener['_connection'], null)
 
             // first backoff step is 1s
             await sleep(1500)
-            assert.ok(listener.isConnected)
+            assert.ok(listener['_connection']!.isOpened)
+            assert.notStrictEqual(listener['_connection'], old)
 
             await notifier.query`SELECT pg_notify(${"ls_re_a"}, ${"1"})`
             await notifier.query`SELECT pg_notify(${"ls_re_b"}, ${"2"})`
@@ -154,7 +203,7 @@ describe("Listener", () => {
             const listener = make()
             await listener.listen("ls_back_a", () => {})
 
-            listener['_conn']['_connector']!.close()
+            listener['_connection']!['_connector'].close()
             await sleep(100)
 
             const received: string[] = []
@@ -162,45 +211,58 @@ describe("Listener", () => {
             await listener.listen("ls_back_b", p => { received.push(p) })
 
             assert.ok(Date.now() - start < 900, "should not wait for the backoff timer")
-            assert.ok(listener.isConnected)
+            assert.ok(listener['_connection']?.isOpened)
 
             await notifier.query`SELECT pg_notify(${"ls_back_b"}, ${"now"})`
             await sleep(100)
             assert.deepStrictEqual(received, ["now"])
         })
 
-        it("should keep a handler registered when the first connect fails, and drop it from the caller's error", async () => {
+        it("should reject listen() and drop the handler when the first connect fails", async () => {
             const listener = make({ port: 1 })
 
             await rejects(async () => await listener.listen("ls_fail", () => {}))
 
-            assert.ok(!listener.isConnected)
-            assert.strictEqual(listener['_handlers']["ls_fail"], undefined)
+            assert.strictEqual(listener['_connection'], null)
+            assert.ok(!listener['_handlers'].has("ls_fail"))
         })
 
         it("should not reconnect after close(), even during backoff", async () => {
             const listener = make()
             await listener.listen("ls_close", () => {})
 
-            listener['_conn']['_connector']!.close()
+            listener['_connection']!['_connector'].close()
             await sleep(100)
 
             await listener.close()
 
             await sleep(1300)
-            assert.ok(!listener.isConnected)
+            assert.strictEqual(listener['_connection'], null)
+            assert.strictEqual(listener['_connecting'], null)
         })
     })
 
 
-    describe("Close and config", () => {
+    describe("Close", () => {
         it("should close the underlying connection on close()", async () => {
             const listener = make()
             await listener.listen("ls_closing", () => {})
 
+            const conn = listener['_connection']!
             await listener.close()
 
-            assert.ok(listener['_conn'].isClosed)
+            assert.ok(conn.isClosed)
+            assert.ok(listener.isClosed)
+            assert.ok(!listener.isOpened)
+        })
+
+        it("should drop all handlers on close()", async () => {
+            const listener = make()
+            await listener.listen("ls_drop", () => {})
+
+            await listener.close()
+
+            assert.strictEqual(listener['_handlers'].size, 0)
         })
 
         it("should reject listen() after close()", async () => {
@@ -210,25 +272,14 @@ describe("Listener", () => {
             await rejects(async () => await listener.listen("ls_after_close", () => {}), ErrConnectionClosed)
         })
 
-        it("should forward the user's onConnect and onClose from the config", async () => {
-            let connects = 0
-            let closes = 0
+        it("should be safe to call close() twice", async () => {
+            const listener = make()
+            await listener.listen("ls_twice", () => {})
 
-            const listener = make({
-                onConnect: () => { connects++ },
-                onClose: () => { closes++ },
-            })
+            await listener.close()
+            await listener.close()
 
-            await listener.listen("ls_forward", () => {})
-            assert.strictEqual(connects, 1)
-
-            listener['_conn']['_connector']!.close()
-            await sleep(100)
-            assert.strictEqual(closes, 1)
-
-            // reconnect fires onConnect again
-            await sleep(1500)
-            assert.strictEqual(connects, 2)
+            assert.ok(listener.isClosed)
         })
     })
 })

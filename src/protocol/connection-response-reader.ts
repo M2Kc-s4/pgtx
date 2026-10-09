@@ -1,5 +1,5 @@
 import { AuthenticationCode, DataTypeOid, DataTypeOids, INT4Length, ResponseType, TransactionStatus } from "./constants"
-import { ChannelName, ColumnDescription, ParameterDescription } from "../types"
+import { ColumnDescription, ParameterDescription } from "../types"
 import { PostgresError } from "../error"
 import { handlers } from "./types"
 
@@ -271,7 +271,7 @@ export class ConnectionResponseBuffer {
 
     readNotificationResponse() {
         this.readInt32()
-        const name = this.readCString() as ChannelName
+        const name = this.readCString()
         const payload = this.readCString()
         
         return {name, payload} 

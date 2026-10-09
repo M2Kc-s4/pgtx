@@ -1,130 +1,120 @@
 import { Err, Future, Ok } from "fluent-future"
 import { Connection } from "./connection"
 import { sql } from "."
+import { safe } from "./utils"
 import { ErrConnectionClosed, PostgresError } from "./error"
 import { ConnectionPartialConfig } from "./types"
 
 type Handler = (payload: string) => void
 
-export type ListenerConfig = Omit<ConnectionPartialConfig, 'onNotify'>
-
-/**
- * Dedicated LISTEN/NOTIFY subscriber. Owns one connection, reconnects with
- * backoff and re-issues LISTEN for every registered channel after a drop.
- * Notifications sent while the connection is down are lost (PostgreSQL semantics).
- *
- * @example
- * const listener = new Listener({ host: 'localhost', user: 'postgres', password: 'postgres', database: 'test', port: 5432 })
- * await listener.listen('orders', payload => console.log(payload))
- * await listener.close()
- */
 export class Listener {
-    private readonly _conn: Connection
-    private readonly _handlers: Record<string, Handler> = {}
-    private readonly _subscribed = new Set<string>()
-
-    private _opening: Future<void, PostgresError> | null = null
+    private _connection: Connection | null = null
+    private _connecting: Future<Connection, PostgresError> | null = null
     private _timer: NodeJS.Timeout | null = null
     private _closed = false
     private _retry = 0
+    private _handlers = new Map<string, Set<Handler>>()
 
-    constructor(config: ListenerConfig) {
-        this._conn = new Connection({
-            ...config,
-            onNotify: this._handlers,
-            onClose: () => {
-                this._subscribed.clear()
-                config.onClose?.()
-                this._reconnect()
-            },
-        })
-    }
+    constructor(private config: ConnectionPartialConfig) {}
 
 
-    /** Subscribes `cb` to `channel`. Connects first if needed. Replaces a previous handler for the same channel. */
-    listen(channel: string, cb: Handler): Future<void, PostgresError> {
+    /** Subscribes `handler` to `channel`, connecting first if needed. */
+    listen(channel: string, handler: Handler): Future<void, PostgresError> {
         if (this._closed) return Err(ErrConnectionClosed)
 
-        this._handlers[channel] = cb
+        let handlers = this._handlers.get(channel)
+        if (!handlers) this._handlers.set(channel, handlers = new Set())
+        handlers.add(handler)
 
-        return this._open()
-            .tapErr(() => { if (this._handlers[channel] === cb) delete this._handlers[channel] })
+        return this._connect()
+            .andThen(conn => conn.execute`LISTEN ${sql.ident(channel)}`)
+            .tapErr(() => {
+                handlers.delete(handler)
+                if (!handlers.size && this._handlers.get(channel) === handlers) this._handlers.delete(channel)
+            })
     }
 
 
-    /** Stops listening to `channel`. */
-    unlisten(channel: string): Future<void, PostgresError> {
-        delete this._handlers[channel]
+    /** Removes `handler` (or all handlers if omitted); sends UNLISTEN when the channel has none left. */
+    unlisten(channel: string, handler?: Handler): Future<void, PostgresError> {
+        const handlers = this._handlers.get(channel)
+        if (!handlers) return Ok()
 
-        if (!this._subscribed.delete(channel) || !this._conn.isConnected) return Ok()
+        if (handler) handlers.delete(handler)
+        else handlers.clear()
 
-        return this._conn.execute`UNLISTEN ${sql.ident(channel)}`
+        if (handlers.size) return Ok()
+
+        this._handlers.delete(channel)
+
+        return this._connection?.isOpened
+            ? this._connection.execute`UNLISTEN ${sql.ident(channel)}`
+            : Ok()
     }
 
 
-    /** Connects (if not connected) and makes sure every registered channel is LISTENed. */
-    private _open(): Future<void, PostgresError> {
-        if (this._closed) return Err(ErrConnectionClosed)
+    private _connect(): Future<Connection, PostgresError> {
+        if (this._connection?.isOpened) return Ok(this._connection)
 
-        if (this._opening) return this._opening.andThen(() => this._sync())
+        if (this._connecting) return this._connecting
 
-        if (this._conn.isConnected) return this._sync()
+        const retry = () => {
+            this._connection = null
 
-        this._clearTimer()
+            if (this._closed || this._timer || !this._handlers.size) return
 
-        this._opening = this._conn.connect()
-            .tap(() => { this._retry = 0 })
-            .tapErr(() => this._reconnect())
-            .finally(() => { this._opening = null })
+            const delay = Math.min(1000 * 2 ** this._retry++, 30_000)
 
-        return this._opening.andThen(() => this._sync())
+            this._timer = setTimeout(() => {
+                this._timer = null
+                this._connect().recover()
+            }, delay)
+        }
+
+        this._connecting = Connection.connect(this.config)
+            .andThen(conn => {
+                if (this._closed) {
+                    void conn.close()
+                    return Err(ErrConnectionClosed)
+                }
+
+                conn.on('notify', (channel, payload) => {
+                    this._handlers.get(channel)?.forEach(h => safe(h, payload))
+                })
+                conn.on('close', () => { if (this._connection === conn) retry() })
+
+                return Future.all([...this._handlers.keys()].map(ch => conn.execute`LISTEN ${sql.ident(ch)}`))
+                    .tapErr(() => void conn.close())
+                    .map(() => conn)
+            })
+            .tap(conn => {
+                this._connection = conn
+                this._retry = 0
+            })
+            .tapErr(retry)
+            .finally(() => { this._connecting = null })
+
+        return this._connecting
     }
 
 
-    /** Issues LISTEN for channels that aren't subscribed on the current session yet. */
-    private _sync(): Future<void, PostgresError> {
-        if (!this._conn.isConnected) return Ok()
-
-        const pending = Object.keys(this._handlers).filter(ch => !this._subscribed.has(ch))
-
-        for (const ch of pending) this._subscribed.add(ch)
-
-        return Future.all(pending.map(ch =>
-            this._conn.execute`LISTEN ${sql.ident(ch)}`
-                .tapErr(() => this._subscribed.delete(ch))
-        )).map(() => {})
+    get isClosed() {
+        return this._closed
     }
 
 
-    private _reconnect() {
-        if (this._closed || this._timer) return
-
-        const delay = Math.min(1000 * 2 ** this._retry++, 30_000)
-
-        this._timer = setTimeout(() => {
-            this._timer = null
-            this._open().recover()
-        }, delay)
+    get isOpened() {
+        return !this._closed
     }
 
 
-    private _clearTimer() {
-        if (!this._timer) return
-
-        clearTimeout(this._timer)
-        this._timer = null
-    }
-
-
-    get isConnected() {
-        return this._conn.isConnected
-    }
-
-
+    /** Stops reconnecting and closes the connection. Not usable afterward. */
     close() {
         this._closed = true
-        this._clearTimer()
+        this._handlers.clear()
 
-        return this._conn.close()
+        if (this._timer) clearTimeout(this._timer)
+
+        return this._connection?.close() ?? Future.resolve()
     }
 }

@@ -3,7 +3,6 @@ import { Queue, RingQueue } from "./queue";
 import { Begin, Future, Ok } from "fluent-future";
 import { ErrPoolClosed, PostgresError } from "./error";
 import { PoolConfig, PoolPartialConfig, Row, Waiter } from "./types";
-import { compileSqlTemplate } from "./utils";
 
 
 /**
@@ -41,20 +40,26 @@ export class Pool {
         while (this._available.hasMore) {
             const conn = this._available.shift
 
-            if (conn.isOpened && conn.isConnected) {
-                return Ok(conn)
-            }
+            if (conn.isOpened) return Ok(conn)
+            
             this._total--
         }
 
         if (this._total < this.config.max) {
             this._total++
-            const conn = new Connection(this.config)
 
-            return conn.connect()
-                .map(() => conn)
+            return Connection.connect(this.config)
+                .tap(conn => {
+                    if (!this.config.defaultHandlers) return 
+
+                    const handlers = this.config.defaultHandlers
+                    if (handlers.close) conn.on('close', handlers.close)
+                    if (handlers.error) conn.on('error', handlers.error)
+                    if (handlers.notice) conn.on('notice', handlers.notice)
+                    if (handlers.notify) conn.on('notify', handlers.notify)
+                    if (handlers.query) conn.on('query', handlers.query)
+                })
                 .tapErr(() => this._total--)
-            
         }
 
         const {future, reject, resolve} = Future.withResolvers<Connection, PostgresError>()
@@ -88,7 +93,7 @@ export class Pool {
             return
         }
 
-        if (conn.isClosed || !conn.isConnected) {
+        if (conn.isClosed) {
             this._total--
 
             if (this._waiting.hasMore) {
@@ -142,7 +147,7 @@ export class Pool {
         while (this._available.hasMore) {
             const conn = this._available.shift
 
-            if (conn.isClosed || !conn.isConnected) {
+            if (conn.isClosed) {
                 this._total--
                 continue
             }
@@ -166,7 +171,7 @@ export class Pool {
         while (this._available.hasMore) {
             const conn = this._available.shift
 
-            if (conn.isClosed || !conn.isConnected) {
+            if (conn.isClosed) {
                 this._total--
                 continue
             }
@@ -195,7 +200,7 @@ export class Pool {
         while (this._available.hasMore) {
             const conn = this._available.shift
 
-            if (conn.isClosed || !conn.isConnected) {
+            if (conn.isClosed) {
                 this._total--
                 continue
             }

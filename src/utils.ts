@@ -1,14 +1,13 @@
 import { Clause } from "./clauses/abstract.clause"
 import { PostgresError } from "./error"
-import { CollectQuery, ExecuteQuery, PostgresQuery, StreamQuery } from "./query"
-import { ClauseStrategyParams, LogLevel, QueryText } from "./types"
+import { ClauseStrategyParams,  } from "./types"
 
 const cache = new WeakMap<TemplateStringsArray, string>()
 
 export function compileSqlTemplate(templates: TemplateStringsArray, args: unknown[], argOffset = 0) {
     const cached = cache.get(templates)
     
-    if (cached) return {args, text: cached as QueryText}
+    if (cached) return {args, text: cached}
     
     const templateLength = templates.length
     
@@ -34,7 +33,7 @@ export function compileSqlTemplate(templates: TemplateStringsArray, args: unknow
 
     !args.some(value => value instanceof Clause) && cache.set(templates, query.text)
     
-    return query as {text: QueryText, args: unknown[]}
+    return query 
 }
 
 export function logQuery(text: string, args: unknown[]) {

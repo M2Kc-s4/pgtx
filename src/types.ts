@@ -11,25 +11,32 @@ export type ClauseStrategyParams = {
     args: any[],
 }
 
+
 export type ColumnDescription = {
     name: string
     typeOID: DataTypeOid
 }
 
+export type ConnectionEvent = "error" | "notice" | "notify" | "query" | "close"
+
+export type ErrorHandler = (error: PostgresError) => void
+export type NoticeHandler = (notice: PostgresError) => void
+export type NotifyHandler = (channel: string, payload: string) => void
+export type QueryHandler = (text: string, args: unknown[]) => void
+export type CloseHandler = () => void
+
+export type Handlers = {
+    error: ErrorHandler
+    notice: NoticeHandler
+    query: QueryHandler
+    notify: NotifyHandler
+    close: CloseHandler
+}
+
+
 export type SSLMode = 'disable' | 'prefer' | 'require'
 
 export type LogLevel = "none" | "error" | "notice" | "query"
-
-
-export type ConnectionHandlers = {
-    onConnect?: () => void
-    onClose?: () => void
-    onError?: (error: PostgresError) => void
-    onNotice?: (notice: PostgresError) => void
-    onNotify?: Record<string, (payload: string) => void> | ((channel: string, payload: string) => void)
-    onQuery?: (text: string, args: unknown[]) => void
-}
-
 
 export type ConnectionPartialConfig = {
     user: string
@@ -42,14 +49,7 @@ export type ConnectionPartialConfig = {
     queryTimeout?: number
     ssl?: SSLMode
     caPath?: string
-    onConnect?: () => void
-    onClose?: () => void
-    onError?: (error: PostgresError) => void
-    onNotice?: (notice: PostgresError) => void
-    onNotify?: Record<string, (payload: string) => void> | ((channel: string, payload: string) => void)
-    onQuery?: (text: string, args: unknown[]) => void
 }
-
 
 export type ConnectionConfig = {
     user: string
@@ -62,29 +62,26 @@ export type ConnectionConfig = {
     queryTimeout: number
     ssl: SSLMode
     caPath?: string
-} & ConnectionHandlers
-
-export type StatementName = Branded<string, 'StatementName'>
-
-export type QueryText = Branded<string, 'QueryText'>
-
-export type ChannelName = Branded<string, "ChannelName">
+}
 
 export type ParameterDescription = DataTypeOid[]
 
 export type StatementMeta = {
-    statement: StatementName
+    statement: string
     columns: ColumnDescription[],
     parameters: ParameterDescription
 }
 
 
-export type PoolPartialConfig = ConnectionPartialConfig & {
+
+export type PoolPartialConfig = ConnectionPartialConfig &  {
     max?: number
+    defaultHandlers?: Partial<Handlers>
 }
 
 export type PoolConfig = ConnectionPartialConfig & {
     max: number
+    defaultHandlers?: Partial<Handlers>
 }
 
 

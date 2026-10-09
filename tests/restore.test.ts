@@ -1,7 +1,7 @@
 import { after, describe, it } from "node:test"
 import assert, { rejects } from "assert"
 import { Pool } from "../src"
-import { ErrPoolClosed } from "../src/error"
+import { ErrPoolClosed, ErrSocketFailed } from "../src/error"
 
 const config = {
     host: process.env.PGHOST!,
@@ -45,7 +45,7 @@ describe("Pool", () => {
             const second = await pool.acquire()
 
             assert.notStrictEqual(second, first)
-            assert.ok(second.isConnected)
+            assert.ok(second.isOpened)
 
             const result = await second.query`SELECT 1 as value`
             assert.strictEqual(result[0].value, 1)
@@ -94,7 +94,7 @@ describe("Pool", () => {
             const conn = await pool.acquire()
 
             const pending = conn.query`SELECT pg_sleep(0.5), 1 as value`
-            const assertion = rejects(async () => await pending)
+            const assertion = rejects(async () => await pending, ErrSocketFailed)
 
             conn['_connector']!.close()
             await assertion
@@ -179,21 +179,19 @@ describe("Pool", () => {
     })
 
 
-    describe("Handlers from config", async () => {
-        it("should apply onConnect and onError to every pooled connection", async () => {
-            let connects = 0
+    describe("Default handlers", async () => {
+        it("should attach defaultHandlers.error to every pooled connection", async () => {
             const errors: unknown[] = []
 
             const pool = new Pool({
                 ...config,
+                logLevel: 'none',
                 max: 2,
-                onConnect: () => { connects++ },
-                onError: e => { errors.push(e) },
+                defaultHandlers: { error: e => { errors.push(e) } },
             })
 
             const a = await pool.acquire()
             const b = await pool.acquire()
-            assert.strictEqual(connects, 2)
 
             await rejects(async () => await a.query`SELECT * FROM table_that_does_not_exist_xyz`)
             await rejects(async () => await b.query`SELECT * FROM table_that_does_not_exist_xyz`)
@@ -204,15 +202,15 @@ describe("Pool", () => {
             await pool.close()
         })
 
-        it("should call onClose for each connection that drops", async () => {
+        it("should call defaultHandlers.close once for each connection that drops", async () => {
             let closes = 0
-            const pool = new Pool({ ...config, max: 2, onClose: () => { closes++ } })
+            const pool = new Pool({ ...config, logLevel: 'none', max: 2, defaultHandlers: { close: () => { closes++ } } })
 
             const a = await pool.acquire()
             const b = await pool.acquire()
 
-            a['_connector']!.close()
-            b['_connector']!.close()
+            a['_connector'].close()
+            b['_connector'].close()
             await new Promise(r => setTimeout(r, 100))
 
             assert.strictEqual(closes, 2)
@@ -220,6 +218,31 @@ describe("Pool", () => {
             pool.release(a)
             pool.release(b)
             await pool.close()
+        })
+
+        it("should report an unexpected drop as ErrSocketFailed, but not a deliberate close", async () => {
+            const errors: unknown[] = []
+            const pool = new Pool({
+                ...config,
+                logLevel: 'none',
+                max: 2,
+                defaultHandlers: { error: e => { errors.push(e) } },
+            })
+
+            const a = await pool.acquire()
+            const b = await pool.acquire()
+            pool.release(b)
+
+            a['_connector'].close()
+            await new Promise(r => setTimeout(r, 100))
+
+            assert.strictEqual(errors.length, 1)
+            assert.strictEqual(errors[0], ErrSocketFailed)
+
+            pool.release(a)
+            await pool.close()   // closes idle b on purpose
+
+            assert.strictEqual(errors.length, 1)
         })
     })
 

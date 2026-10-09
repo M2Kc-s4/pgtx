@@ -2,7 +2,7 @@ import { Socket } from 'net'
 import { DescribeType, ResponseType } from './constants'
 import { ConnectionResponseBuffer } from './connection-response-reader'
 import { ConnectionRequestBuffer } from './connection-request-writer'
-import { ErrSocketFailed, PostgresError } from '../error'
+import { PostgresError } from '../error'
 import { CollectQuery, ExecuteQuery, ParseQuery, StreamQuery } from '../query'
 
 
@@ -21,12 +21,13 @@ export class SocketConnector {
         onData: (type: ResponseType, length: number, reader: ConnectionResponseBuffer) => void,
         onClose: () => void
     ) {
-        this._onClose = function() {
+        this._onClose = () => {
             this._closed = true
+
             onClose()
         }
 
-        this._onData = function(buffer) {
+        this._onData = buffer => {
             const currentBuffer = this._residualResponseBuffer 
                 ? Buffer.concat([this._residualResponseBuffer, buffer as Buffer]) 
                 : buffer as Buffer
@@ -59,6 +60,8 @@ export class SocketConnector {
             this._scheduled = true
             
             setImmediate(() => {
+                if (this.isClosed) return
+
                 this._scheduled = false
                 this._requestBuffer.hasMore && this._socket.write(this._requestBuffer.asBuffer())
                 this._requestBuffer.clear()

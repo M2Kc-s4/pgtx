@@ -6,7 +6,7 @@ const allTypesTableName = "all_datatypes_parsing_test"
 
 
 describe("Complete PostgreSQL Binary Datatypes Parsing Test", async () => {
-    const conn = await new Connection({
+    const conn = await Connection.connect({
         host: process.env.PGHOST!,
         user: process.env.PGUSER!,
         password: process.env.PGPASSWORD!,
@@ -14,8 +14,6 @@ describe("Complete PostgreSQL Binary Datatypes Parsing Test", async () => {
         port: Number(process.env.PGPORT),
         int8toBigint: true
     })
-
-    await conn.connect()
 
     before(async () => {
         await conn.query`drop table ${sql.ident(allTypesTableName)}`.recover()

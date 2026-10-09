@@ -6,16 +6,21 @@ import { ErrCertificateFileNotFound, ErrDatabaseNotFound, ErrNonceMismatch, ErrP
 import { Future } from "fluent-future"
 import { connect } from "node:tls"
 import { createConnection, Socket } from "node:net"
-import { ConnectionConfig } from "../types"
+import { ConnectionConfig, ConnectionPartialConfig, SSLMode } from "../types"
 import { readFileSync } from "node:fs"
 import { ConnectionRequestBuffer } from "./connection-request-writer"
 import { ConnectionResponseBuffer } from "./connection-response-reader"
 
 
-export function createSocket(config: ConnectionConfig) {
+type CreateSocketConfig = {
+    host: string
+    port: number
+}
+
+export function createSocket({ host, port }: CreateSocketConfig) {
     const { future, resolve, reject } = Future.withResolvers<Socket, PostgresError>()
 
-    const socket = createConnection({host: config.host, port: config.port})
+    const socket = createConnection({host, port})
 
     socket.once('connect', () => resolve(socket))
     socket.once('error', () => reject(ErrDatabaseNotFound))
@@ -24,8 +29,14 @@ export function createSocket(config: ConnectionConfig) {
 }
 
 
-export function upgradeSocket(socket: Socket, config: ConnectionConfig) {
-    if (config.ssl === 'disable') return Future.resolve(socket)
+type UpgradeSocketConfig = {
+    ssl?: SSLMode
+    caPath?: string
+    host: string
+}
+
+export function upgradeSocket(socket: Socket, { ssl, caPath, host }: UpgradeSocketConfig) {
+    if (ssl === 'disable') return Future.resolve(socket)
 
     const { future, reject, resolve } = Future.withResolvers<Socket, PostgresError>()
 
@@ -50,7 +61,7 @@ export function upgradeSocket(socket: Socket, config: ConnectionConfig) {
             let cert: Buffer | undefined = undefined
 
             try {
-                cert = config.caPath ? readFileSync(config.caPath) : undefined
+                cert = caPath ? readFileSync(caPath) : undefined
             } catch {
                 socket.destroy()
                 return reject(ErrCertificateFileNotFound)
@@ -58,8 +69,8 @@ export function upgradeSocket(socket: Socket, config: ConnectionConfig) {
 
             const tls = connect({
                 socket: socket,
-                host: config.host,
-                rejectUnauthorized: config.ssl === 'require',
+                host: host,
+                rejectUnauthorized: ssl === 'require',
                 ca: cert
             })
 
@@ -83,7 +94,7 @@ export function upgradeSocket(socket: Socket, config: ConnectionConfig) {
             tls.once('error', onTlsError)
 
         } else if (responseCode === 'N') {
-            if (config.ssl === 'require') {
+            if (ssl === 'require') {
                 socket.destroy()
                 reject(ErrSSLDenied)
                 return
@@ -102,7 +113,13 @@ export function upgradeSocket(socket: Socket, config: ConnectionConfig) {
 }
 
 
-export function authorizeSocket(socket: Socket, config: ConnectionConfig) {
+type AuthorizaSocketConfig = {
+    password?: string
+    user: string,
+    database: string
+}
+
+export function authorizeSocket(socket: Socket, { password, user, database }: AuthorizaSocketConfig) {
     const { future, reject, resolve } = Future.withResolvers<Socket, PostgresError>()
     const writer = ConnectionRequestBuffer.new(2048)
 
@@ -155,27 +172,28 @@ export function authorizeSocket(socket: Socket, config: ConnectionConfig) {
 
 
             case AuthenticationCodes.CleartextPassword: {
-                if (!config.password) return reject(ErrPasswordRequired)
-                connector.writeNowait(writer.writePassword(config.password))
+                if (!password) return reject(ErrPasswordRequired)
+                connector.writeNowait(writer.writePassword(password))
                 writer.clear()
             } break
 
 
             case AuthenticationCodes.MD5Password: {
                 const salt = reader.readMD5Salt()
-                if (!config.password) return reject(ErrPasswordRequired)
+                if (!password) return reject(ErrPasswordRequired)
 
-                const password = encryptMd5(config.password, config.user, salt)
-                connector.writeNowait(writer.writePassword(password))
+                connector.writeNowait(writer.writePassword(
+                    encryptMd5(password, user, salt)
+                ))
                 writer.clear()
             } break
 
             
             case AuthenticationCodes.SASL: {
                 reader.readSaslMechanisms()
-                if (!config.password) return reject(ErrPasswordRequired)
+                if (!password) return reject(ErrPasswordRequired)
 
-                clientMessage = `n=${config.user},r=${nonce}`
+                clientMessage = `n=${user},r=${nonce}`
 
                 connector.writeNowait(writer.writeSaslInitial('SCRAM-SHA-256', `n,,${clientMessage}`))
                 writer.clear()
@@ -185,7 +203,7 @@ export function authorizeSocket(socket: Socket, config: ConnectionConfig) {
             case AuthenticationCodes.SASLContinue: {
                 serverMessage = reader.readSaslMessage(length)
 
-                if (!config.password) return reject(ErrPasswordRequired)
+                if (!password) return reject(ErrPasswordRequired)
 
                 const parts = Object.fromEntries(serverMessage.split(',').map(x => x.split('=')))
                 
@@ -202,7 +220,7 @@ export function authorizeSocket(socket: Socket, config: ConnectionConfig) {
                 
                 const authMessage = `${clientMessage},${serverMessage},${clientFinalMessageWithoutProof}`
 
-                const { clientProof } = calculateScramAuth(config.password, saltBase64, iterations, authMessage)
+                const { clientProof } = calculateScramAuth(password, saltBase64, iterations, authMessage)
 
                 const clientFinalMessage = `${clientFinalMessageWithoutProof},p=${clientProof}`
 
@@ -218,7 +236,7 @@ export function authorizeSocket(socket: Socket, config: ConnectionConfig) {
     }
 
 
-    connector.writeNowait(writer.writeStartup(config.user, config.database))
+    connector.writeNowait(writer.writeStartup(user, database))
     writer.clear()
 
     return future
