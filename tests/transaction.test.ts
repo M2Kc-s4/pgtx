@@ -6,7 +6,7 @@ const tablename = "transaction_isolation_test"
 
 type Table = { id: number, status: string }
 
-describe("Transaction isolation test", async () => {
+describe("Transaction test", async () => {
     const pool = new Pool({
         host: process.env.PGHOST!,
         user: process.env.PGUSER!,
@@ -14,6 +14,7 @@ describe("Transaction isolation test", async () => {
         database: process.env.PGDATABASE!,
         port: Number(process.env.PGPORT),
         max: Number(process.env.PGMAX),
+        logLevel: 'none'
     })
 
     

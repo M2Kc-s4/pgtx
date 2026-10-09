@@ -1,19 +1,19 @@
-import { after, before, describe, it } from "node:test";
-import { Pool } from "../src";
+import { after, describe, it } from "node:test";
+import { Connection } from "../src";
 import assert from "assert";
 
 describe('Query order test', async () => {
-    const pool = new Pool({
+    const conn = await Connection.connect({
         host: process.env.PGHOST!,
         user: process.env.PGUSER!,
         password: process.env.PGPASSWORD!,
         database: process.env.PGDATABASE!,
         port: Number(process.env.PGPORT),
-        max: Number(process.env.PGMAX),
+        logLevel: 'none'
     })
 
     after(async () => {
-        await pool.close()
+        await conn.close()
     })
 
 
@@ -21,7 +21,7 @@ describe('Query order test', async () => {
         const results = await Promise.all(
             Array.from({length: 100}, async (_, i) => {
                 
-                return await pool.query`
+                return await conn.query`
                     SELECT ${i}::int as value
                 `
             }
@@ -43,7 +43,7 @@ describe('Query order test', async () => {
 
         for (let i = 0; i < 50; i++) {
             batch1.push(
-                pool.query`
+                conn.query`
                     SELECT ${i}::int as value
                 `
             )
@@ -56,7 +56,7 @@ describe('Query order test', async () => {
 
         for (let i = 50; i < 100; i++) {
             batch2.push(
-                pool.query`
+                conn.query`
                     SELECT ${i}::int as value
                 `
             )
@@ -76,15 +76,15 @@ describe('Query order test', async () => {
 
     it("should reject pending queries after pipeline error", async () => {
         const queries = [
-            pool.query`
+            conn.query`
                 SELECT 1 as value
             `,
 
-            pool.query`
+            conn.query`
                 SELECT * FROM table_that_does_not_exist
             `,
 
-            pool.query`
+            conn.query`
                 SELECT 3 as value
             `
         ]

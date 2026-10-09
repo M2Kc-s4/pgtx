@@ -1,6 +1,6 @@
 import { after, before, describe, it } from 'node:test';
 import assert from 'node:assert';
-import { Pool } from '../src'; 
+import { Connection, Pool } from '../src'; 
 
 
 interface UserRow {
@@ -9,33 +9,33 @@ interface UserRow {
 }
 
 
-describe('Streaming test', () => {
-    const pool = new Pool({
+describe('Stream test', async () => {
+    const conn = await Connection.connect({
         host: process.env.PGHOST!,
         port: Number(process.env.PGPORT),
         user: process.env.PGUSER!,
         password: process.env.PGPASSWORD,
         database: process.env.PGDATABASE!,
         queryTimeout: 500,
-        logLevel: 'query'
+        logLevel: 'none'
     })
 
     before(async () => {
-        await pool.query`DROP TABLE IF EXISTS test_stream_users;`
-        await pool.query`CREATE TABLE test_stream_users (id SERIAL PRIMARY KEY, name TEXT);`
-        await pool.query`
+        await conn.query`DROP TABLE IF EXISTS test_stream_users;`
+        await conn.query`CREATE TABLE test_stream_users (id SERIAL PRIMARY KEY, name TEXT);`
+        await conn.query`
             INSERT INTO test_stream_users (name) 
             VALUES ('Alice'), ('Bob'), ('Charlie'), ('David');
         `
     })
 
     after(async () => {
-        await pool.close()
+        await conn.close()
     })
 
 
     it('StreamQuery - Streaming test', async () => {
-        const userStream = pool.stream<UserRow>`
+        const userStream = conn.stream<UserRow>`
             SELECT id, name FROM test_stream_users ORDER BY id ASC
         `
 
@@ -56,7 +56,7 @@ describe('Streaming test', () => {
 
 
     it('StreamQuery - Correct error handling', async () => {
-        const invalidStream = pool.stream`SELECT * FROM non_existent_table_abc;`
+        const invalidStream = conn.stream`SELECT * FROM non_existent_table_abc;`
 
         try {
             for await (const _ of invalidStream) {}
@@ -70,7 +70,7 @@ describe('Streaming test', () => {
 
     it('StreamQuery - Timeout test', async () => {
 
-        const timeoutStream = pool.stream`SELECT pg_sleep(2);`
+        const timeoutStream = conn.stream`SELECT pg_sleep(2);`
 
         const startTime = Date.now()
 

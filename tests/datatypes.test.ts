@@ -5,14 +5,15 @@ import assert from "assert"
 const allTypesTableName = "all_datatypes_parsing_test"
 
 
-describe("Complete PostgreSQL Binary Datatypes Parsing Test", async () => {
+describe("Datatypes Test", async () => {
     const conn = await Connection.connect({
         host: process.env.PGHOST!,
         user: process.env.PGUSER!,
         password: process.env.PGPASSWORD!,
         database: process.env.PGDATABASE!,
         port: Number(process.env.PGPORT),
-        int8toBigint: true
+        int8toBigint: true,
+        logLevel: 'none'
     })
 
     before(async () => {

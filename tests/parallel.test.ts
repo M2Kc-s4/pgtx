@@ -1,20 +1,20 @@
-import { describe, it, expectFailure, before, after } from "node:test";
+import { describe, it, before, after } from "node:test";
 import assert from "node:assert";
-import { Connection, Pool } from "../src"; 
+import { Connection } from "../src"; 
 
 describe("Connection Pipeline Race Condition", async () => {
-    const pool = new Pool({
+    const conn = await Connection.connect({
         host: process.env.PGHOST!,
         user: process.env.PGUSER!,
         password: process.env.PGPASSWORD!,
         database: process.env.PGDATABASE!,
         port: Number(process.env.PGPORT),
-        max: Number(process.env.PGMAX),
+        logLevel: 'none'
     })
     
 
     before(async () => {
-        await pool.begin(async (t) => {
+        await conn.begin(async (t) => {
             await t.query`CREATE TABLE IF NOT EXISTS test_courses (id UUID PRIMARY KEY, title TEXT);`
             await t.query`CREATE TABLE IF NOT EXISTS test_topics (id UUID PRIMARY KEY, name TEXT);`
             
@@ -25,7 +25,7 @@ describe("Connection Pipeline Race Condition", async () => {
     })
 
     after(async () => {
-        await pool.close()
+        await conn.close()
     })
 
 
@@ -34,8 +34,8 @@ describe("Connection Pipeline Race Condition", async () => {
         const topicId = "00000000-0000-0000-0000-000000000002"
 
         const pipeline = Promise.all([
-            pool.query`SELECT title FROM test_courses WHERE id = ${courseId}`,
-            pool.query`SELECT name FROM test_topics WHERE id = ${topicId}`
+            conn.query`SELECT title FROM test_courses WHERE id = ${courseId}`,
+            conn.query`SELECT name FROM test_topics WHERE id = ${topicId}`
         ])
 
         const timeout = new Promise((_, reject) => 
@@ -60,8 +60,8 @@ describe("Connection Pipeline Race Condition", async () => {
         const courseId = "00000000-0000-0000-0000-000000000001"
 
         const pipeline = Promise.all([
-            pool.query`SELECT title FROM test_courses WHERE id = ${courseId}`,
-            pool.query`SELECT title FROM test_courses WHERE id = ${courseId}`
+            conn.query`SELECT title FROM test_courses WHERE id = ${courseId}`,
+            conn.query`SELECT title FROM test_courses WHERE id = ${courseId}`
         ])
 
         const timeout = new Promise((_, reject) => 
