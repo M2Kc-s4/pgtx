@@ -58,8 +58,6 @@ export class SocketConnector {
                 onData(type, length, reader)
             }
         }
-
-        // В Bun write() может записать данные частично — докидываем остаток на drain
         this._onDrain = () => {
             if (!this._backlog) return
 
@@ -68,7 +66,7 @@ export class SocketConnector {
             this._write(backlog)
         }
 
-        this._socket.setKeepAlive(true, 10000)
+        this._socket.setKeepAlive?.(true, 10000)
         this._socket.data = {
             onData: this._onData,
             onClose: this._onClose,
