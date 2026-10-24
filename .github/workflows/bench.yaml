@@ -8,7 +8,7 @@ on:
 jobs:
   benchmark:
     runs-on: ubuntu-latest
-    
+
     services:
       postgres:
         image: postgres:latest
@@ -29,7 +29,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Setup Bun
-        uses: oven-sh/setup-bun@v1
+        uses: oven-sh/setup-bun@v2
         with:
           bun-version: latest
 
@@ -37,12 +37,11 @@ jobs:
         run: bun install
 
       - name: Build
-        run: npm run build
+        run: bun run build
 
-      
-
-      - name: Install wrk
+      - name: Install wrk and psql client
         run: |
+          sudo apt-get update
           sudo apt-get install -y postgresql-client wrk
 
       - name: Create benchmark table
@@ -50,7 +49,7 @@ jobs:
           PGPASSWORD=postgres psql -h localhost -p 5432 -U postgres -d test -c "
             DROP TABLE IF EXISTS users;
             CREATE TABLE users (id SERIAL PRIMARY KEY, name TEXT, balance INT);
-            INSERT INTO users (name, balance) 
+            INSERT INTO users (name, balance)
             SELECT 'User ' || i, floor(random() * 1000) FROM generate_series(1, 1000) s(i);
           "
 
@@ -59,14 +58,17 @@ jobs:
           bun test-server.ts &
           SERVER_PID=$!
           echo "SERVER_PID=$SERVER_PID" >> $GITHUB_ENV
-          
+
           for i in {1..30}; do
             if curl -s http://localhost:3000 > /dev/null; then
               echo "Server is up!"
-              break
+              exit 0
             fi
             sleep 1
           done
+
+          echo "Server did not start within 30s"
+          exit 1
         env:
           PGHOST: localhost
           PGPORT: 5432
@@ -85,43 +87,44 @@ jobs:
         run: |
           mkdir -p results
           echo "=== Benchmark with 50 connections ===" | tee results/benchmark_50.txt
-          
+
           echo -e "\n--- PGTX Driver ---" | tee -a results/benchmark_50.txt
           wrk -t2 -c50 -d10s --latency http://localhost:3000/pgtx | tee -a results/benchmark_50.txt
-          
+
           echo -e "\n--- Postgres.js Driver ---" | tee -a results/benchmark_50.txt
           wrk -t2 -c50 -d10s --latency http://localhost:3000/postgresjs | tee -a results/benchmark_50.txt
-          
+
           echo -e "\n--- Bun.Sql Driver ---" | tee -a results/benchmark_50.txt
           wrk -t2 -c50 -d10s --latency http://localhost:3000/bunsql | tee -a results/benchmark_50.txt
 
       - name: Benchmark - 200 connections
         run: |
           echo "=== Benchmark with 200 connections ===" | tee results/benchmark_200.txt
-          
+
           echo -e "\n--- PGTX Driver ---" | tee -a results/benchmark_200.txt
           wrk -t4 -c200 -d10s --latency http://localhost:3000/pgtx | tee -a results/benchmark_200.txt
-          
+
           echo -e "\n--- Postgres.js Driver ---" | tee -a results/benchmark_200.txt
           wrk -t4 -c200 -d10s --latency http://localhost:3000/postgresjs | tee -a results/benchmark_200.txt
-          
+
           echo -e "\n--- Bun.Sql Driver ---" | tee -a results/benchmark_200.txt
           wrk -t4 -c200 -d10s --latency http://localhost:3000/bunsql | tee -a results/benchmark_200.txt
 
       - name: Benchmark - 500 connections
         run: |
           echo "=== Benchmark with 500 connections ===" | tee results/benchmark_500.txt
-          
+
           echo -e "\n--- PGTX Driver ---" | tee -a results/benchmark_500.txt
           wrk -t8 -c500 -d10s --latency http://localhost:3000/pgtx | tee -a results/benchmark_500.txt
-          
+
           echo -e "\n--- Postgres.js Driver ---" | tee -a results/benchmark_500.txt
           wrk -t8 -c500 -d10s --latency http://localhost:3000/postgresjs | tee -a results/benchmark_500.txt
-          
+
           echo -e "\n--- Bun.Sql Driver ---" | tee -a results/benchmark_500.txt
           wrk -t8 -c500 -d10s --latency http://localhost:3000/bunsql | tee -a results/benchmark_500.txt
 
       - name: Upload results
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: benchmark-results
@@ -134,14 +137,15 @@ jobs:
           kill $SERVER_PID 2>/dev/null || true
 
       - name: Summary
+        if: always()
         run: |
           echo "## Benchmark Results" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "### 50 Connections" >> $GITHUB_STEP_SUMMARY
-          cat results/benchmark_50.txt >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "### 200 Connections" >> $GITHUB_STEP_SUMMARY
-          cat results/benchmark_200.txt >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "### 500 Connections" >> $GITHUB_STEP_SUMMARY
-          cat results/benchmark_500.txt >> $GITHUB_STEP_SUMMARY
+          for n in 50 200 500; do
+            f="results/benchmark_$n.txt"
+            [ -f "$f" ] || continue
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "### $n Connections" >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+            cat "$f" >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+          done

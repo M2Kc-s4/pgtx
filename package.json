@@ -1,6 +1,6 @@
 {
   "name": "@m2k-5f/pgtx",
-  "version": "3.1.0",
+  "version": "4.0.0",
   "type": "module",
   "description": "Blazing-fast PostgreSQL driver with pipeline support.",
   "files": [
@@ -9,10 +9,7 @@
   ],
   "scripts": {
     "build": "tsc",
-    "prepublishOnly": "npm run build",
-    "testGitHub": "node --import tsx --test $(find tests -name '*.test.ts')",
-    "test": "node --env-file=.env --import tsx --test ./tests/*.test.ts",
-    "benchmark": "npx tsx benchmark.ts"
+    "prepublishOnly": "bun run build"
   },
   "repository": {
     "type": "git",
@@ -38,20 +35,21 @@
   },
   "exports": {
     ".": {
-      "import": "./dist/index.js",
-      "require": "./dist/index.js",
-      "types": "./dist/index.d.ts"
+      "types": "./dist/index.d.ts",
+      "bun": "./dist/index.js"
     }
   },
   "devDependencies": {
-    "@types/node": "^26.2.0",
+    "@types/bun": "latest",
     "mitata": "^1.0.34",
     "pg": "^8.23.0",
     "postgres": "^3.4.9",
-    "tsx": "^4.23.11",
     "typescript": "^5.9.3"
   },
   "dependencies": {
     "fluent-future": "^1.5.0"
+  },
+  "engines": {
+    "bun": ">=1.1.0"
   }
 }

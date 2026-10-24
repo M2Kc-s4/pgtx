@@ -1,7 +1,7 @@
 import { EMPTY_ARRAY, ResponseType, ResponseTypes } from "./protocol/constants"
 import { compileSqlTemplate, logError, logNotice, logQuery, safe } from "./utils"
 import { ConnectionConfig, ConnectionPartialConfig, StatementMeta, Row, ConnectionEvent, ErrorHandler, NoticeHandler, QueryHandler, NotifyHandler, CloseHandler, Handlers } from "./types"
-import { SocketConnector } from "./protocol/socket-connector"
+import { PgSocket, SocketConnector } from "./protocol/socket-connector"
 import { Queue } from "./queue"
 import { CollectQuery, StreamQuery, ExecuteQuery, ParseQuery, PostgresQuery } from "./query"
 import { sql } from "."
@@ -10,7 +10,6 @@ import { ErrConnectionClosed, ErrSocketFailed, PostgresError } from "./error"
 import { ReadableStreamDefaultController } from "stream/web"
 import { authorizeSocket, createSocket, upgradeSocket } from "./protocol/socket-authorization"
 import { ConnectionResponseBuffer } from "./protocol/connection-response-reader"
-import { Socket } from "net"
 
 const logLevels = {
     none: {
@@ -122,7 +121,7 @@ export class Connection {
 
 
     private constructor(
-        socket: Socket,
+        socket: PgSocket,
         config: ConnectionPartialConfig,
     ) {       
         this.config = {

@@ -148,8 +148,8 @@ on the way to the database.
 Queries started in the same tick are folded into one pipelined write automatically — no batching API, no config flag:
 
 ```typescript
-const users = pool.query<User>`SELECT * FROM users`
-const posts = pool.query<Post>`SELECT * FROM posts`
+const users = conn.query<User>`SELECT * FROM users`
+const posts = conn.query<Post>`SELECT * FROM posts`
 
 const [usersResult, postsResult] = await Promise.all([users, posts])
 ```

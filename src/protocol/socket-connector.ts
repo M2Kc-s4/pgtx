@@ -1,23 +1,35 @@
-import { Socket } from 'net'
+import type { Socket } from "bun"
 import { DescribeType, ResponseType } from './constants'
 import { ConnectionResponseBuffer } from './connection-response-reader'
 import { ConnectionRequestBuffer } from './connection-request-writer'
 import { PostgresError } from '../error'
 import { CollectQuery, ExecuteQuery, ParseQuery, StreamQuery } from '../query'
 
+export type SocketData = {
+    onData?: (buffer: Buffer) => void
+    onClose?: () => void
+    onError?: (error: Error) => void
+    onDrain?: () => void
+    onHandshake?: (socket: PgSocket, success: boolean, error: Error | null) => void
+}
+
+export type PgSocket = Socket<SocketData>
+
 
 export class SocketConnector {
     private _requestBuffer = ConnectionRequestBuffer.new(65536)
     private _residualResponseBuffer: Buffer | null = null
+    private _backlog: Buffer | null = null
     private _scheduled = false
     private _closed = false
 
     private _onClose: () => void
     private _onData: (buffer: Buffer) => void
+    private _onDrain: () => void
 
 
     constructor(
-        private _socket: Socket,
+        private _socket: PgSocket,
         onData: (type: ResponseType, length: number, reader: ConnectionResponseBuffer) => void,
         onClose: () => void
     ) {
@@ -28,13 +40,13 @@ export class SocketConnector {
         }
 
         this._onData = buffer => {
-            const currentBuffer = this._residualResponseBuffer 
-                ? Buffer.concat([this._residualResponseBuffer, buffer as Buffer]) 
-                : buffer as Buffer
-                
+            const currentBuffer = this._residualResponseBuffer
+                ? Buffer.concat([this._residualResponseBuffer, buffer])
+                : buffer
+
             this._residualResponseBuffer = null
 
-            const reader = ConnectionResponseBuffer.from(currentBuffer) 
+            const reader = ConnectionResponseBuffer.from(currentBuffer)
 
             while (reader.hasMore()) {
                 if (!reader.hasFullPacket()) {
@@ -42,15 +54,41 @@ export class SocketConnector {
                     return
                 }
 
-                const {type, length} = reader.readType()
+                const { type, length } = reader.readType()
                 onData(type, length, reader)
             }
-        }        
+        }
+
+        // В Bun write() может записать данные частично — докидываем остаток на drain
+        this._onDrain = () => {
+            if (!this._backlog) return
+
+            const backlog = this._backlog
+            this._backlog = null
+            this._write(backlog)
+        }
 
         this._socket.setKeepAlive(true, 10000)
-        this._socket.on('data', this._onData)
-        this._socket.on('error', () => {})
-        this._socket.on('close', this._onClose)
+        this._socket.data = {
+            onData: this._onData,
+            onClose: this._onClose,
+            onDrain: this._onDrain,
+            onError: () => {},
+        }
+    }
+
+
+    private _write(buffer: Uint8Array) {
+        if (this._backlog) {
+            this._backlog = Buffer.concat([this._backlog, buffer])
+            return
+        }
+
+        const written = this._socket.write(buffer)
+
+        if (written < buffer.length) {
+            this._backlog = Buffer.from(buffer.subarray(Math.max(written, 0)))
+        }
     }
 
 
@@ -58,19 +96,19 @@ export class SocketConnector {
         if (!this._scheduled) {
             this._requestBuffer.clear()
             this._scheduled = true
-            
+
             setImmediate(() => {
                 if (this.isClosed) return
 
                 this._scheduled = false
-                this._requestBuffer.hasMore && this._socket.write(this._requestBuffer.asBuffer())
+                this._requestBuffer.hasMore && this._write(this._requestBuffer.asBuffer())
                 this._requestBuffer.clear()
             })
         }
     }
 
     writeNowait(request: ConnectionRequestBuffer) {
-        this._socket.write(request.asBuffer())
+        this._write(request.asBuffer())
     }
 
 
@@ -81,7 +119,7 @@ export class SocketConnector {
             .writeParse(query.meta.statement, query.text)
             .writeDescribe(DescribeType.Statement, query.meta.statement)
             .writeSync()
-    }   
+    }
 
 
     writeQuery(query: CollectQuery<any> | StreamQuery<any> | ExecuteQuery): PostgresError | null {
@@ -89,27 +127,26 @@ export class SocketConnector {
 
         const err = this._requestBuffer
             .writeBind("", query.meta, query.args)
-        
+
         if (err) return err
 
         this._requestBuffer
             .writeExecute("")
             .writeSync()
-        
+
         return null
     }
 
 
     unwrapSocket() {
-        this._socket.off("data", this._onData)
-        this._socket.off('close', this._onClose)
+        this._socket.data = {}
 
         return this._socket
     }
 
 
     close() {
-        this._socket.destroy()
+        this._socket.terminate()
     }
 
     get isClosed() {

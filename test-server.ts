@@ -1,5 +1,5 @@
 import { sql, Pool } from '@m2k-5f/pgtx';
-import { env } from 'node:process';
+import { env } from 'bun';
 import postgres from 'postgres';
 
 const DB = {
@@ -14,7 +14,7 @@ const pgtx = new Pool({ ...DB, max: 20 })
 
 const pg = postgres({ ...DB, max: 20 })
 
-const bunSql = new Bun.sql({...DB, max: 20})
+const bunSql = new Bun.SQL({...DB, max: 20})
 
 
 const server = Bun.serve({

@@ -1,110 +1,93 @@
-import { createServer } from 'node:http';
-import postgres from 'postgres';
+import { env } from 'bun'
+import postgres from 'postgres'
 
 const sql = postgres({
-  host: process.env.PGHOST || 'localhost',
-  port: Number(process.env.PGPORT) || 5433,
-  user: process.env.PGUSER || 'postgres',
-  password: process.env.PGPASSWORD || 'postgres',
-  database: process.env.PGDATABASE || 'pgtx_test',
-  max: Number(process.env.PGMAX) || 10
-});
+  host: env.PGHOST || 'localhost',
+  port: Number(env.PGPORT),
+  user: env.PGUSER,
+  password: env.PGPASSWORD,
+  database: env.PGDATABASE,
+  max: Number(env.PGMAX),
+})
 
-const server = createServer(async (req, res) => {
-  if (req.url === '/users') {
-    let counter = 0
-    const base = Math.floor(Math.random() * 1000) + 1
-    const targetIds = Array.from({ length: 5 }, (_, i) => (base < 950 ? base : 950) + i).sort((a,b)=>a-b)
+const server = Bun.serve({
+  port: 3001,
 
-    const users = await sql`
-      SELECT id, name, balance 
-      FROM bench_users 
-      WHERE id = ANY(${targetIds})
-      order by id
-    `.catch(err => {
-      console.log(err)
-      return null
-    })
-  
-      
-    if (!users) {
-      res.writeHead(500, { 'Content-Type': 'application/json' })
-      res.end(JSON.stringify({ error: 'Error' }))
-      return
-    }
+  async fetch(req) {
+    const { pathname } = new URL(req.url)
 
-    for (const user of users) {
-      if (user.id !== targetIds[counter++]) {
-        console.log(users, targetIds);
-        
-        res.writeHead(500, { 'Content-Type': 'application/json' })
-        res.end(JSON.stringify({ error: 'Id mismatch' }))
-        return
+    if (pathname === '/users') {
+      let counter = 0
+      const base = Math.floor(Math.random() * 1000) + 1
+      const targetIds = Array.from({ length: 5 }, (_, i) => (base < 950 ? base : 950) + i).sort((a, b) => a - b)
+
+      const users = await sql`
+        SELECT id, name, balance
+        FROM bench_users
+        WHERE id = ANY(${targetIds})
+        order by id
+      `.catch(err => {
+        console.log(err)
+        return null
+      })
+
+      if (!users) {
+        return Response.json({ error: 'Error' }, { status: 500 })
       }
+
+      for (const user of users) {
+        if (user.id !== targetIds[counter++]) {
+          console.log(users, targetIds)
+
+          return Response.json({ error: 'Id mismatch' }, { status: 500 })
+        }
+      }
+
+      return Response.json(users)
     }
 
-    res.writeHead(200, { 'Content-Type': 'application/json' })
-    res.end(JSON.stringify(users))
-    return
-  }
-
-  if (req.url === '/user') {
+    if (pathname === '/user') {
       const targetId = Math.floor(Math.random() * 1000) + 1
-  
+
       const user = await sql`
         SELECT id, name, balance FROM bench_users WHERE id = ${targetId}
       `
       .catch(err => {
-        console.log(err)      
+        console.log(err)
         return null
       })
-  
+
       if (!user) {
-        res.writeHead(504, { 'Content-Type': 'application/json' })
-        res.end(JSON.stringify({ error: 'Timeout' }))
-        return
+        return Response.json({ error: 'Timeout' }, { status: 504 })
       }
 
-  
       if (user[0].id !== targetId) {
-        res.writeHead(500, { 'Content-Type': 'application/json' })
-        res.end(JSON.stringify({ error: 'ID mismatch' }))
-        return
+        return Response.json({ error: 'ID mismatch' }, { status: 500 })
       }
-  
-      res.writeHead(200, { 'Content-Type': 'application/json' })
-      res.end(JSON.stringify(user))
-      return
+
+      return Response.json(user[0])
     }
-  
-    if (req.url === '/simple') {
-      const [row] = await sql<{res: 1}[]>`SELECT 1 as res`
+
+    if (pathname === '/simple') {
+      const [row] = await sql<{ res: 1 }[]>`SELECT 1 as res`
       .catch(err => {
         console.log(err)
         return []
       })
-  
+
       if (!row) {
-        res.writeHead(504, { 'Content-Type': 'application/json' })
-        res.end(JSON.stringify({ error: 'Timeout' }))
-        return
+        return Response.json({ error: 'Timeout' }, { status: 504 })
       }
-  
+
       if (row.res !== 1) {
-        res.writeHead(500, { 'Content-Type': 'application/json' })
-        res.end(JSON.stringify({ error: 'Res mismatch' }))
-        return
+        return Response.json({ error: 'Res mismatch' }, { status: 500 })
       }
-  
-      res.writeHead(200, { 'Content-Type': 'application/json' })
-      res.end(JSON.stringify(row))
-      return
+
+      return Response.json(row)
     }
 
-  res.writeHead(404)
-  res.end()
-});
+    return new Response(null, { status: 404 })
+  },
+})
 
-server.listen(3001, () => {
-  console.log('Postgres.js Server running on http://localhost:3000');
-});
+console.log(`Postgres.js Server running on http://localhost:${server.port}`)

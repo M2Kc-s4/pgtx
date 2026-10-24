@@ -1,12 +1,10 @@
 import { calculateScramAuth, generateNonce } from "../security/sasl"
-import { SocketConnector } from "./socket-connector"
+import { PgSocket, SocketConnector, SocketData } from "./socket-connector"
 import { AuthenticationCodes, ResponseType, ResponseTypes } from "./constants"
 import { encryptMd5 } from "../security/md5"
 import { ErrCertificateFileNotFound, ErrDatabaseNotFound, ErrNonceMismatch, ErrPasswordRequired, ErrSocketFailedDuringAuth, ErrSSLDenied, ErrUntrustedCertificate, PostgresError } from "../error"
 import { Future } from "fluent-future"
-import { connect } from "node:tls"
-import { createConnection, Socket } from "node:net"
-import { ConnectionConfig, ConnectionPartialConfig, SSLMode } from "../types"
+import { SSLMode } from "../types"
 import { readFileSync } from "node:fs"
 import { ConnectionRequestBuffer } from "./connection-request-writer"
 import { ConnectionResponseBuffer } from "./connection-response-reader"
@@ -17,13 +15,37 @@ type CreateSocketConfig = {
     port: number
 }
 
+export const socketHandlers = {
+    data(socket: PgSocket, data: Buffer) {
+        socket.data.onData?.(data)
+    },
+    close(socket: PgSocket) {
+        socket.data.onClose?.()
+    },
+    error(socket: PgSocket, error: Error) {
+        socket.data.onError?.(error)
+    },
+    drain(socket: PgSocket) {
+        socket.data.onDrain?.()
+    },
+    handshake(socket: PgSocket, success: boolean, error: Error | null) {
+        socket.data.onHandshake?.(socket, success, error)
+    },
+}
+
+
 export function createSocket({ host, port }: CreateSocketConfig) {
-    const { future, resolve, reject } = Future.withResolvers<Socket, PostgresError>()
+    const { future, resolve, reject } = Future.withResolvers<PgSocket, PostgresError>()
 
-    const socket = createConnection({host, port})
-
-    socket.once('connect', () => resolve(socket))
-    socket.once('error', () => reject(ErrDatabaseNotFound))
+    Bun.connect<SocketData>({
+        hostname: host,
+        port,
+        data: {},
+        socket: socketHandlers,
+    }).then(
+        socket => resolve(socket),
+        () => reject(ErrDatabaseNotFound)
+    )
 
     return future
 }
@@ -35,76 +57,71 @@ type UpgradeSocketConfig = {
     host: string
 }
 
-export function upgradeSocket(socket: Socket, { ssl, caPath, host }: UpgradeSocketConfig) {
+export function upgradeSocket(socket: PgSocket, { ssl, caPath, host }: UpgradeSocketConfig) {
     if (ssl === 'disable') return Future.resolve(socket)
 
-    const { future, reject, resolve } = Future.withResolvers<Socket, PostgresError>()
+    const { future, reject, resolve } = Future.withResolvers<PgSocket, PostgresError>()
 
     const writer = ConnectionRequestBuffer.new(2048)
 
-    function onError() {
-        reject(ErrSocketFailedDuringAuth)
+    socket.data = {
+        onClose: () => reject(ErrSocketFailedDuringAuth),
+
+        onData: data => {
+            socket.data = {}
+
+            const responseCode = data.toString('utf8', 0, 1)
+
+            if (responseCode === 'S') { 
+                if (data.length > 1) {
+                    socket.terminate()
+                    return reject(ErrSocketFailedDuringAuth)
+                }
+
+                let cert: Buffer | undefined = undefined
+
+                try {
+                    cert = caPath ? readFileSync(caPath) : undefined
+                } catch {
+                    socket.terminate()
+                    return reject(ErrCertificateFileNotFound)
+                }
+
+                socket.upgradeTLS<SocketData>({
+                    data: {
+                        onHandshake: (tls, success) => {
+                            if (!success) {
+                                tls.terminate()
+                                return reject(ErrUntrustedCertificate)
+                            }
+
+                            tls.data = {}
+                            resolve(tls)
+                        },
+                        onError: () => reject(ErrUntrustedCertificate),
+                        onClose: () => reject(ErrSocketFailedDuringAuth),
+                    },
+                    socket: socketHandlers,
+                    tls: {
+                        serverName: host,
+                        rejectUnauthorized: ssl === 'require',
+                        ca: cert,
+                    },
+                })
+
+            } else if (responseCode === 'N') {
+                if (ssl === 'require') {
+                    socket.terminate()
+                    reject(ErrSSLDenied)
+                    return
+                }
+                resolve(socket)
+            } else {
+                socket.terminate()
+                reject(ErrSocketFailedDuringAuth)
+            }
+        },
     }
-
-    socket.once('error', onError)
-
-    socket.once('data', (data: Buffer) => {
-        socket.off('error', onError)
-
-        const responseCode = data.toString('utf8', 0, 1)
-
-        if (responseCode === 'S') {
-            if (data.length > 1) {
-                socket.unshift(data.subarray(1))
-            }
-
-            let cert: Buffer | undefined = undefined
-
-            try {
-                cert = caPath ? readFileSync(caPath) : undefined
-            } catch {
-                socket.destroy()
-                return reject(ErrCertificateFileNotFound)
-            }
-
-            const tls = connect({
-                socket: socket,
-                host: host,
-                rejectUnauthorized: ssl === 'require',
-                ca: cert
-            })
-
-            const tlsCleanup = () => {
-                tls.off('secureConnect', onSecureConnect)
-                tls.off('error', onTlsError)
-            }
-
-            const onSecureConnect = () => {
-                tlsCleanup()                
-                resolve(tls)
-            }
-
-            const onTlsError = () => {
-                tlsCleanup()
-                tls.destroy() 
-                reject(ErrUntrustedCertificate)
-            }
-
-            tls.once('secureConnect', onSecureConnect)
-            tls.once('error', onTlsError)
-
-        } else if (responseCode === 'N') {
-            if (ssl === 'require') {
-                socket.destroy()
-                reject(ErrSSLDenied)
-                return
-            }
-            resolve(socket)
-        } else {
-            socket.destroy()
-            reject(ErrSocketFailedDuringAuth)
-        }
-    })
 
     socket.write(writer.writeSSLRequest().asBuffer())
     writer.clear()
@@ -119,8 +136,8 @@ type AuthorizaSocketConfig = {
     database: string
 }
 
-export function authorizeSocket(socket: Socket, { password, user, database }: AuthorizaSocketConfig) {
-    const { future, reject, resolve } = Future.withResolvers<Socket, PostgresError>()
+export function authorizeSocket(socket: PgSocket, { password, user, database }: AuthorizaSocketConfig) {
+    const { future, reject, resolve } = Future.withResolvers<PgSocket, PostgresError>()
     const writer = ConnectionRequestBuffer.new(2048)
 
     const nonce = generateNonce()
@@ -145,7 +162,7 @@ export function authorizeSocket(socket: Socket, { password, user, database }: Au
             } break
 
 
-            case ResponseTypes.ErrorResponse: {                            
+            case ResponseTypes.ErrorResponse: {
                 const error = reader.readErrorResponse()
                 connector.close()
                 reject(error)
@@ -188,7 +205,7 @@ export function authorizeSocket(socket: Socket, { password, user, database }: Au
                 writer.clear()
             } break
 
-            
+
             case AuthenticationCodes.SASL: {
                 reader.readSaslMechanisms()
                 if (!password) return reject(ErrPasswordRequired)
@@ -206,7 +223,7 @@ export function authorizeSocket(socket: Socket, { password, user, database }: Au
                 if (!password) return reject(ErrPasswordRequired)
 
                 const parts = Object.fromEntries(serverMessage.split(',').map(x => x.split('=')))
-                
+
                 const serverNonce = parts.r
                 const saltBase64 = parts.s
                 const iterations = parseInt(parts.i, 10)
@@ -217,7 +234,7 @@ export function authorizeSocket(socket: Socket, { password, user, database }: Au
                 }
 
                 const clientFinalMessageWithoutProof = `c=biws,r=${serverNonce}`
-                
+
                 const authMessage = `${clientMessage},${serverMessage},${clientFinalMessageWithoutProof}`
 
                 const { clientProof } = calculateScramAuth(password, saltBase64, iterations, authMessage)
@@ -232,7 +249,7 @@ export function authorizeSocket(socket: Socket, { password, user, database }: Au
             case AuthenticationCodes.SASLFinal: {
                 reader.readSaslMessage(length)
             } break
-        } 
+        }
     }
 
 

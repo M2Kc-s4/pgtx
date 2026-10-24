@@ -16,9 +16,9 @@ jobs:
         env:
           POSTGRES_USER: postgres
           POSTGRES_PASSWORD: postgres
-          POSTGRES_DB: pgtx_test
+          POSTGRES_DB: postgres
         ports:
-          - 5433:5432
+          - 5432:5432
         options: >-
           --health-cmd pg_isready
           --health-interval 10s
@@ -28,26 +28,25 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install Node.js
-        uses: actions/setup-node@v4
+      - name: Install Bun
+        uses: oven-sh/setup-bun@v2
         with:
-          node-version: 20
-          cache: 'npm'
+          bun-version: 1.1.0
 
       - name: Install dependencies
-        run: npm install
+        run: bun install
 
       - name: Build
-        run: npm run build
+        run: bun run build
 
       - name: Run tests
-        run: npm run testGitHub
+        run: bun test
         env:
           PGHOST: localhost
-          PGPORT: 5433
+          PGPORT: 5432
           PGUSER: postgres
           PGPASSWORD: postgres
-          PGDATABASE: pgtx_test
+          PGDATABASE: postgres
 
   benchmark:
     runs-on: ubuntu-latest
@@ -58,9 +57,9 @@ jobs:
         env:
           POSTGRES_USER: postgres
           POSTGRES_PASSWORD: postgres
-          POSTGRES_DB: pgtx_test
+          POSTGRES_DB: postgres
         ports:
-          - 5433:5432
+          - 5432:5432
         options: >-
           --health-cmd pg_isready
           --health-interval 10s
@@ -70,242 +69,78 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install Node.js
-        uses: actions/setup-node@v4
+      - name: Install Bun
+        uses: oven-sh/setup-bun@v2
         with:
-          node-version: latest
-          cache: 'npm'
+          bun-version: latest
 
       - name: Install dependencies
-        run: npm install
+        run: bun install
 
       - name: Build
-        run: npm run build
+        run: bun run build
 
-      - name: Install wrk 
+      - name: Install wrk and psql client
         run: |
-          sudo apt install wrk
+          sudo apt-get update
+          sudo apt-get install -y wrk postgresql-client
 
       - name: Seed database for wrk
         run: |
-          sudo apt-get install -y postgresql-client
-          PGPASSWORD=postgres psql -h localhost -p 5433 -U postgres -d pgtx_test -c "
+          PGPASSWORD=postgres psql -h localhost -p 5432 -U postgres -d postgres -c "
             DROP TABLE IF EXISTS bench_users;
             CREATE TABLE bench_users (id SERIAL PRIMARY KEY, name TEXT, balance INT);
-            INSERT INTO bench_users (name, balance) 
+            INSERT INTO bench_users (name, balance)
             SELECT 'User ' || i, floor(random() * 1000) FROM generate_series(1, 1000) s(i);
           "
 
       - name: Run wrk HTTP benchmark
         env:
           PGHOST: localhost
-          PGPORT: 5433
+          PGPORT: 5432
           PGUSER: postgres
           PGPASSWORD: postgres
-          PGDATABASE: pgtx_test
+          PGDATABASE: postgres
           PGMAX: 10
         run: |
-
-          npx tsx server-postgresjs.ts &
+          bun server-postgresjs.ts &
           POSTGRES_PID=$!
-          
-          npx tsx server-pgtx.ts &
+
+          bun server-pgtx.ts &
           PGTX_PID=$!
-          
-          sleep 3
 
-          echo "=========================================="
-          echo "  TEST PAIR 1: Selecting 5 users"
-          echo "=========================================="
-          
-          echo "Selecting 5 users Postgres.js (10000 conns)"
-          wrk -t2 -c10000 -d10s --latency http://localhost:3001/users 
-          
-          echo ""
-          echo "------------------------------------------"
-          echo ""
-          sleep 5
-          
-          echo "Selecting 5 users @m2k-5f/pgtx (10000 conns)"
-          wrk -t2 -c10000 -d10s --latency http://localhost:3000/users 
-          sleep 5
+          trap 'kill $POSTGRES_PID $PGTX_PID 2>/dev/null || true' EXIT
 
-          echo "=========================================="
-          echo "  TEST PAIR 2: Selecting 5 users (1000 conns)"
-          echo "=========================================="
-          
-          echo "Selecting 5 users Postgres.js (1000 conns)"
-          wrk -t2 -c1000 -d10s --latency http://localhost:3001/users
+          for port in 3000 3001; do
+            timeout 30 bash -c "until curl -sf http://localhost:$port/simple > /dev/null; do sleep 0.5; done"
+          done
 
-          echo ""
-          echo "------------------------------------------"
-          echo ""
-          sleep 5
+          run_pair() {
+            local n=$1 label=$2 path=$3 conns=$4
 
-          echo "Selecting 5 users @m2k-5f/pgtx (1000 conns)"
-          wrk -t2 -c1000 -d10s --latency http://localhost:3000/users
-          sleep 5
+            echo "=========================================="
+            echo "  TEST PAIR $n: $label ($conns conns)"
+            echo "=========================================="
 
-          echo "=========================================="
-          echo "  TEST PAIR 3: Selecting 5 users (200 conns)"
-          echo "=========================================="
-          
-          echo "Selecting 5 users Postgres.js (200 conns)"
-          wrk -t2 -c200 -d10s --latency http://localhost:3001/users
-          
-          echo ""
-          echo "------------------------------------------"
-          echo ""
-          sleep 5
-          
-          echo "Selecting 5 users @m2k-5f/pgtx (200 conns)"
-          wrk -t2 -c200 -d10s --latency http://localhost:3000/users
-          sleep 5
+            echo "$label Postgres.js ($conns conns)"
+            wrk -t2 -c$conns -d10s --latency http://localhost:3001/$path
 
-          echo "=========================================="
-          echo "  TEST PAIR 4: Selecting 5 users (50 conns)"
-          echo "=========================================="
-          
-          echo "Selecting 5 users Postgres.js (50 conns)"
-          wrk -t2 -c50 -d10s --latency http://localhost:3001/users
-          
-          echo ""
-          echo "------------------------------------------"
-          echo ""
-          sleep 5
-          
-          echo "Selecting 5 users @m2k-5f/pgtx (50 conns)"
-          wrk -t2 -c50 -d10s --latency http://localhost:3000/users
-          sleep 5
+            echo ""
+            echo "------------------------------------------"
+            echo ""
+            sleep 5
 
-          echo "=========================================="
-          echo "  TEST PAIR 5: Selecting 1 user (10000 conns)"
-          echo "=========================================="
-          
-          echo "Selecting 1 user Postgres.js (10000 conns)"
-          wrk -t2 -c10000 -d10s --latency http://localhost:3001/user
-          
-          echo ""
-          echo "------------------------------------------"
-          echo ""
-          sleep 5
-          
-          echo "Selecting 1 user @m2k-5f/pgtx (10000 conns)"
-          wrk -t2 -c10000 -d10s --latency http://localhost:3000/user
-          sleep 5
+            echo "$label @m2k-5f/pgtx ($conns conns)"
+            wrk -t2 -c$conns -d10s --latency http://localhost:3000/$path
+            sleep 5
+          }
 
-          echo "=========================================="
-          echo "  TEST PAIR 6: Selecting 1 user (1000 conns)"
-          echo "=========================================="
-          
-          echo "Selecting 1 user Postgres.js (1000 conns)"
-          wrk -t2 -c1000 -d10s --latency http://localhost:3001/user
-          
-          echo ""
-          echo "------------------------------------------"
-          echo ""
-          sleep 5
-          
-          echo "Selecting 1 user @m2k-5f/pgtx (1000 conns)"
-          wrk -t2 -c1000 -d10s --latency http://localhost:3000/user
-          sleep 5
-
-          echo "=========================================="
-          echo "  TEST PAIR 7: Selecting 1 user (200 conns)"
-          echo "=========================================="
-          
-          echo "Selecting 1 user Postgres.js (200 conns)"
-          wrk -t2 -c200 -d10s --latency http://localhost:3001/user
-          
-          echo ""
-          echo "------------------------------------------"
-          echo ""
-          sleep 5
-          
-          echo "Selecting 1 user @m2k-5f/pgtx (200 conns)"
-          wrk -t2 -c200 -d10s --latency http://localhost:3000/user
-          sleep 5
-
-          echo "=========================================="
-          echo "  TEST PAIR 8: Selecting 1 user (50 conns)"
-          echo "=========================================="
-          
-          echo "Selecting 1 user Postgres.js (50 conns)"
-          wrk -t2 -c50 -d10s --latency http://localhost:3001/user
-          
-          echo ""
-          echo "------------------------------------------"
-          echo ""
-          sleep 5
-          
-          echo "Selecting 1 user @m2k-5f/pgtx (50 conns)"
-          wrk -t2 -c50 -d10s --latency http://localhost:3000/user
-          sleep 5
-
-          echo "=========================================="
-          echo "  TEST PAIR 9: Selecting 1 as res (10000 conns)"
-          echo "=========================================="
-          
-          echo "Selecting 1 as res Postgres.js (10000 conns)"
-          wrk -t2 -c10000 -d10s --latency http://localhost:3001/simple
-          
-          echo ""
-          echo "------------------------------------------"
-          echo ""
-          sleep 5
-          
-          echo "Selecting 1 as res @m2k-5f/pgtx (10000 conns)"
-          wrk -t2 -c10000 -d10s --latency http://localhost:3000/simple
-          sleep 5
-
-          echo "=========================================="
-          echo "  TEST PAIR 10: Selecting 1 as res (1000 conns)"
-          echo "=========================================="
-          
-          echo "Selecting 1 as res Postgres.js (1000 conns)"
-          wrk -t2 -c1000 -d10s --latency http://localhost:3001/simple
-          
-          echo ""
-          echo "------------------------------------------"
-          echo ""
-          sleep 5
-          
-          echo "Selecting 1 as res @m2k-5f/pgtx (1000 conns)"
-          wrk -t2 -c1000 -d10s --latency http://localhost:3000/simple
-          sleep 5
-
-          echo "=========================================="
-          echo "  TEST PAIR 11: Selecting 1 as res (200 conns)"
-          echo "=========================================="
-          
-          echo "Selecting 1 as res Postgres.js (200 conns)"
-          wrk -t2 -c200 -d10s --latency http://localhost:3001/simple
-          
-          echo ""
-          echo "------------------------------------------"
-          echo ""
-          sleep 5
-          
-          echo "Selecting 1 as res @m2k-5f/pgtx (200 conns)"
-          wrk -t2 -c200 -d10s --latency http://localhost:3000/simple
-          sleep 5
-
-          echo "=========================================="
-          echo "  TEST PAIR 12: Selecting 1 as res (50 conns)"
-          echo "=========================================="
-          
-          echo "Selecting 1 as res Postgres.js (50 conns)"
-          wrk -t2 -c50 -d10s --latency http://localhost:3001/simple
-          
-          echo ""
-          echo "------------------------------------------"
-          echo ""
-          sleep 5
-          
-          echo "Selecting 1 as res @m2k-5f/pgtx (50 conns)"
-          wrk -t2 -c50 -d10s --latency http://localhost:3000/simple
-          sleep 5
-
-          # Cleanup
-          kill -9 $POSTGRES_PID 2>/dev/null || true
-          kill -9 $PGTX_PID 2>/dev/null || true
+          n=1
+          for target in "Selecting 5 users|users" "Selecting 1 user|user" "Selecting 1 as res|simple"; do
+            label="${target%%|*}"
+            path="${target##*|}"
+            for conns in 10000 1000 200 50; do
+              run_pair $n "$label" "$path" $conns
+              n=$((n + 1))
+            done
+          done
