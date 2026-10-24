@@ -75,6 +75,7 @@ jobs:
           PGUSER: postgres
           PGPASSWORD: postgres
           PGDATABASE: test
+          PGMAX: 20
 
       - name: Warm up
         run: |

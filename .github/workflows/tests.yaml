@@ -47,6 +47,7 @@ jobs:
           PGUSER: postgres
           PGPASSWORD: postgres
           PGDATABASE: postgres
+          PGMAX: 10
 
   benchmark:
     runs-on: ubuntu-latest

@@ -8,13 +8,14 @@ const DB = {
   user: env.PGUSER!,
   password: env.PGPASSWORD!,
   database: env.PGDATABASE!,
+  max: Number(env.PGMAX)
 }
 
-const pgtx = new Pool({ ...DB, max: 20 })
+const pgtx = new Pool(DB)
 
-const pg = postgres({ ...DB, max: 20 })
+const pg = postgres(DB)
 
-const bunSql = new Bun.SQL({...DB, max: 20})
+const bunSql = new Bun.SQL(DB)
 
 
 const server = Bun.serve({
