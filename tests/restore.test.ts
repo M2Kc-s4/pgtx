@@ -1,4 +1,4 @@
-import { after, describe, it } from "node:test"
+import { afterAll, describe, it } from "bun:test"
 import assert, { rejects } from "assert"
 import { Pool } from "../src"
 import { ErrSocketFailed } from "../src/error"
@@ -17,7 +17,7 @@ describe("Pool behavior test", () => {
     describe("Dead connections managing", async () => {
         const pool = new Pool({ ...config, max: 2 })
 
-        after(async () => {
+        afterAll(async () => {
             await pool.close()
         })
 

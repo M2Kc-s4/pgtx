@@ -1,4 +1,4 @@
-import { after, describe, it } from "node:test";
+import { afterAll, describe, it } from "bun:test";
 import { Connection } from "../src";
 import assert from "assert";
 
@@ -12,7 +12,7 @@ describe('Query order test', async () => {
         logLevel: 'none'
     })
 
-    after(async () => {
+    afterAll(async () => {
         await conn.close()
     })
 

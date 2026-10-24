@@ -1,4 +1,4 @@
-import { describe, it } from "node:test"
+import { describe, it } from "bun:test"
 import { ErrSocketFailed, Pool } from "../src"
 import assert, { rejects } from "assert"
 

@@ -1,6 +1,6 @@
-import { describe, it } from "node:test"
-import  { deepEqual as assert, throws } from "node:assert"
 import { sql } from "../src"
+import { describe, it } from 'bun:test'
+import assert from 'assert'
 
 function createParams() {
     return {
@@ -18,8 +18,8 @@ describe('Clauses test', () => {
 
             sql.array(array).mapIntoQuery(params)
 
-            assert(params.text, "$1, $2, $3, $4")
-            assert(params.args, [10, "string", true, null])
+            assert.deepStrictEqual(params.text, "$1, $2, $3, $4")
+            assert.deepStrictEqual(params.args, [10, "string", true, null])
         })
 
         it("test array of clauses", () => {
@@ -32,8 +32,8 @@ describe('Clauses test', () => {
 
             sql.array(array).mapIntoQuery(params)
 
-            assert(params.text, `static, "ident", sql fragment $1`)
-            assert(params.args, ["value"])
+            assert.equal(params.text, `static, "ident", sql fragment $1`)
+            assert.deepStrictEqual(params.args, ["value"])
         })
 
         it("array separator test", () => {
@@ -46,8 +46,8 @@ describe('Clauses test', () => {
 
             sql.array(array, " AND ").mapIntoQuery(params)
 
-            assert(params.text, "name = $1 AND age = $2 AND 1 = 1")
-            assert(params.args, ["name", 18])
+            assert.equal(params.text, "name = $1 AND age = $2 AND 1 = 1")
+            assert.deepStrictEqual(params.args, ["name", 18])
         })
     })
 
@@ -59,8 +59,8 @@ describe('Clauses test', () => {
 
             sql.insert(...entities).mapIntoQuery(params)
 
-            assert(params.text, `(id, name) VALUES ($1, $2), ($3, $4)`)
-            assert(params.args, [123, "Bob", 124, "Alice"])
+            assert.equal(params.text, `(id, name) VALUES ($1, $2), ($3, $4)`)
+            assert.deepStrictEqual(params.args, [123, "Bob", 124, "Alice"])
         })        
 
         it("undefined behavior test (DEFAULT)", () => {
@@ -69,8 +69,8 @@ describe('Clauses test', () => {
 
             sql.insert(...entities).mapIntoQuery(params)
 
-            assert(params.text, `(id, name) VALUES ($1, $2), ($3, DEFAULT)`)
-            assert(params.args, [123, "Bob", 124])
+            assert.equal(params.text, `(id, name) VALUES ($1, $2), ($3, DEFAULT)`)
+            assert.deepStrictEqual(params.args, [123, "Bob", 124])
         })
     })
 
@@ -82,8 +82,8 @@ describe('Clauses test', () => {
 
             sql.fragment`SELECT * FROM "users" ${fragment}`.mapIntoQuery(params)
 
-            assert(params.text, `SELECT * FROM "users" WHERE name = name`)
-            assert(params.args, [])
+            assert.equal(params.text, `SELECT * FROM "users" WHERE name = name`)
+            assert.deepStrictEqual(params.args, [])
         })
 
         it("Nesting fragment test", () => {
@@ -95,11 +95,11 @@ describe('Clauses test', () => {
             sql.fragment`INSERT INTO users (role_id) VALUES ((${roleSelect})) WHERE id = ${1}`
                 .mapIntoQuery(params)
 
-            assert(
+            assert.equal(
                 params.text, 
                 "INSERT INTO users (role_id) VALUES ((SELECT id FROM roles where role_name = $1 limit $2)) WHERE id = $3"
             )
-            assert(params.args, ["admin", 1, 1])
+            assert.deepStrictEqual(params.args, ["admin", 1, 1])
         })
     })
 
@@ -110,8 +110,8 @@ describe('Clauses test', () => {
             
             sql.literal("literal").mapIntoQuery(params)
 
-            assert(params.text, "literal")
-            assert(params.args.length, 0)
+            assert.equal(params.text, "literal")
+            assert.equal(params.args.length, 0)
         })
     })
 
@@ -123,8 +123,8 @@ describe('Clauses test', () => {
 
             sql.update(updateMap).mapIntoQuery(params)
 
-            assert(params.text, `id = $1, name = $2`)
-            assert(params.args, [123, "Alice"])
+            assert.equal(params.text, `id = $1, name = $2`)
+            assert.deepStrictEqual(params.args, [123, "Alice"])
         })
 
         it("Undefined behavior test (SKIP)", () => {
@@ -133,8 +133,8 @@ describe('Clauses test', () => {
 
             sql.update(updateMap).mapIntoQuery(params)
 
-            assert(params.text, `id = $1`)
-            assert(params.args, [123])
+            assert.equal(params.text, `id = $1`)
+            assert.deepStrictEqual(params.args, [123])
         })
     })
 })

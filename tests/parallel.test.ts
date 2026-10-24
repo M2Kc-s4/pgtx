@@ -1,5 +1,5 @@
-import { describe, it, before, after } from "node:test";
-import assert from "node:assert";
+import { describe, it, beforeAll, afterAll } from "bun:test";
+import assert from "assert";
 import { Connection } from "../src"; 
 
 describe("Connection Pipeline Race Condition", async () => {
@@ -13,7 +13,7 @@ describe("Connection Pipeline Race Condition", async () => {
     })
     
 
-    before(async () => {
+    beforeAll(async () => {
         await conn.begin(async (t) => {
             await t.query`CREATE TABLE IF NOT EXISTS test_courses (id UUID PRIMARY KEY, title TEXT);`
             await t.query`CREATE TABLE IF NOT EXISTS test_topics (id UUID PRIMARY KEY, name TEXT);`
@@ -24,7 +24,7 @@ describe("Connection Pipeline Race Condition", async () => {
         })
     })
 
-    after(async () => {
+    afterAll(async () => {
         await conn.close()
     })
 

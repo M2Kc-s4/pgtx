@@ -1,4 +1,4 @@
-import { after, before, describe, it } from "node:test"
+import { afterAll, beforeAll, describe, it } from "bun:test"
 import { Pool, sql } from "../src"
 import assert, { rejects } from "assert"
 
@@ -18,7 +18,7 @@ describe("Transaction test", async () => {
     })
 
     
-    before(async () => {
+    beforeAll(async () => {
         await pool.query`
             create table if not exists ${sql.literal(tablename)} (
                 id bigserial primary key,
@@ -30,7 +30,7 @@ describe("Transaction test", async () => {
     })
 
 
-    after(async () => {
+    afterAll(async () => {
         await pool.close()
     })
 

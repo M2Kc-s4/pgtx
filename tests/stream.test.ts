@@ -1,5 +1,5 @@
-import { after, before, describe, it } from 'node:test';
-import assert from 'node:assert';
+import { afterAll, beforeAll, describe, it } from 'bun:test';
+import assert from 'assert';
 import { Connection, Pool } from '../src'; 
 
 
@@ -20,7 +20,7 @@ describe('Stream test', async () => {
         logLevel: 'none'
     })
 
-    before(async () => {
+    beforeAll(async () => {
         await conn.query`DROP TABLE IF EXISTS test_stream_users;`
         await conn.query`CREATE TABLE test_stream_users (id SERIAL PRIMARY KEY, name TEXT);`
         await conn.query`
@@ -29,7 +29,7 @@ describe('Stream test', async () => {
         `
     })
 
-    after(async () => {
+    afterAll(async () => {
         await conn.close()
     })
 

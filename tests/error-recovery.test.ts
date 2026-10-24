@@ -1,4 +1,4 @@
-import { after, before, describe, it } from "node:test"
+import { afterAll, beforeAll, describe, it } from "bun:test"
 import { Connection,  sql } from "../src"
 import assert from "assert"
 
@@ -16,7 +16,7 @@ describe("Error handling test", async () => {
     })
 
 
-    before(async () => {
+    beforeAll(async () => {
         await conn.query`
             create table if not exists ${sql.ident(table)} (
                 id integer primary key,
@@ -33,7 +33,7 @@ describe("Error handling test", async () => {
     })
 
 
-    after(async () => {
+    afterAll(async () => {
         await conn.close()
     })
 

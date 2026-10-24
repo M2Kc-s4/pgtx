@@ -1,4 +1,4 @@
-import { after, afterEach, before, describe, it } from "node:test"
+import { afterAll, afterEach, beforeAll, describe, it } from "bun:test"
 import assert, { rejects } from "assert"
 import { Connection } from "../src"
 import { Listener } from "../src/listener"
@@ -18,7 +18,7 @@ const sleep = (ms: number) => new Promise(r => setTimeout(r, ms))
 describe("Listener test", async () => {
     const notifier = await Connection.connect(config)
 
-    after(async () => {
+    afterAll(async () => {
         await notifier.close()
     })
 

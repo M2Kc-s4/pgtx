@@ -1,4 +1,4 @@
-import { after, before, describe, it } from "node:test"
+import { afterAll, beforeAll, describe, it } from "bun:test"
 import { Connection, Pool, sql } from "../src"
 import assert from "assert"
 
@@ -16,7 +16,7 @@ describe("Datatypes Test", async () => {
         logLevel: 'none'
     })
 
-    before(async () => {
+    beforeAll(async () => {
         await conn.query`drop table ${sql.ident(allTypesTableName)}`.recover()
         await conn.query`
             create table if not exists ${sql.literal(allTypesTableName)} (
@@ -61,9 +61,11 @@ describe("Datatypes Test", async () => {
             );`
     })
 
-    after(async () => {
+
+    afterAll(async () => {
         await conn.close()
     })
+    
 
     it("should correctly parse absolutely all specified types in binary mode", async () => {
         await conn.query`truncate table ${sql.ident(allTypesTableName)}`
